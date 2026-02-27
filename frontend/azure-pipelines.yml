@@ -1,0 +1,31 @@
+# frontend/azure-pipelines.yml
+
+# No trigger block = manual pipeline
+# Can be run from Azure DevOps UI
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  dockerRegistryServiceConnection: 'metis-labs-acr-connection'
+  imageRepository: 'ml-certilabs-api-frontend'
+  containerRegistry: 'metisacr.azurecr.io'
+  dockerfilePath: 'frontend/Dockerfile'
+  tag: 'latest'   # 👈 Static 'latest' tag
+
+stages:
+  - stage: BuildAndPush
+    displayName: 'Build and Push Docker Image for Frontend'
+    jobs:
+      - job: Build
+        steps:
+          - task: Docker@2
+            displayName: 'Build and Push Docker Image'
+            inputs:
+              containerRegistry: $(dockerRegistryServiceConnection)
+              repository: $(imageRepository)
+              command: buildAndPush
+              Dockerfile: $(dockerfilePath)
+              buildContext: .
+              tags: |
+                $(tag)

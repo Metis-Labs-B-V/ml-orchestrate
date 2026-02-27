@@ -1,0 +1,189 @@
+2026-02-09 18:16:08,581 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 18:16:08,582 INFO supervisord started with pid 1
+2026-02-09 18:16:09,590 INFO spawned: 'runserver' with pid 8
+2026-02-09 18:16:10,943 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 18:32:39,242 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 18:32:39,243 INFO supervisord started with pid 1
+2026-02-09 18:32:40,253 INFO spawned: 'runserver' with pid 8
+2026-02-09 18:32:41,586 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 19:57:54,339 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 19:57:54,341 INFO supervisord started with pid 1
+2026-02-09 19:57:55,345 INFO spawned: 'runserver' with pid 8
+2026-02-09 19:57:56,797 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 19:58:07,821 WARN received SIGTERM indicating exit request
+2026-02-09 19:58:07,823 INFO waiting for runserver to die
+2026-02-09 19:58:07,916 INFO stopped: runserver (exit status 0)
+2026-02-09 19:58:08,966 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 19:58:08,967 INFO supervisord started with pid 1
+2026-02-09 19:58:09,978 INFO spawned: 'runserver' with pid 8
+2026-02-09 19:58:11,339 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:00:46,073 WARN received SIGTERM indicating exit request
+2026-02-09 20:00:46,076 INFO waiting for runserver to die
+2026-02-09 20:00:46,164 INFO stopped: runserver (exit status 0)
+2026-02-09 20:00:47,221 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:00:47,222 INFO supervisord started with pid 1
+2026-02-09 20:00:48,238 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:00:49,606 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:01:51,375 WARN received SIGTERM indicating exit request
+2026-02-09 20:01:51,378 INFO waiting for runserver to die
+2026-02-09 20:01:51,448 INFO stopped: runserver (exit status 0)
+2026-02-09 20:01:52,036 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:01:52,037 INFO supervisord started with pid 1
+2026-02-09 20:01:53,041 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:01:54,374 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:03:06,096 WARN received SIGTERM indicating exit request
+2026-02-09 20:03:06,098 INFO waiting for runserver to die
+2026-02-09 20:03:06,166 INFO stopped: runserver (exit status 0)
+2026-02-09 20:03:06,984 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:03:06,986 INFO supervisord started with pid 1
+2026-02-09 20:03:07,995 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:03:09,345 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:03:42,194 WARN received SIGTERM indicating exit request
+2026-02-09 20:03:42,196 INFO waiting for runserver to die
+2026-02-09 20:03:42,298 INFO stopped: runserver (exit status 0)
+2026-02-09 20:03:49,706 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:03:49,707 INFO supervisord started with pid 1
+2026-02-09 20:03:50,712 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:03:52,104 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:08:05,545 WARN received SIGTERM indicating exit request
+2026-02-09 20:08:05,546 INFO waiting for runserver to die
+2026-02-09 20:08:05,615 INFO stopped: runserver (exit status 0)
+2026-02-09 20:08:06,775 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:08:06,776 INFO supervisord started with pid 1
+2026-02-09 20:08:07,785 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:08:09,236 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:08:09,236 WARN received SIGTERM indicating exit request
+2026-02-09 20:08:09,236 INFO waiting for runserver to die
+2026-02-09 20:08:09,264 INFO stopped: runserver (exit status 0)
+2026-02-09 20:08:09,993 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:08:09,994 INFO supervisord started with pid 1
+2026-02-09 20:08:11,004 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:08:12,392 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:09:02,731 WARN received SIGTERM indicating exit request
+2026-02-09 20:09:02,731 INFO waiting for runserver to die
+2026-02-09 20:09:02,838 INFO stopped: runserver (exit status 0)
+2026-02-09 20:09:03,732 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:09:03,733 INFO supervisord started with pid 1
+2026-02-09 20:09:04,757 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:09:06,252 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 20:25:13,652 WARN received SIGTERM indicating exit request
+2026-02-09 20:25:13,655 INFO waiting for runserver to die
+2026-02-09 20:25:13,738 INFO stopped: runserver (exit status 0)
+2026-02-09 20:25:54,400 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 20:25:54,402 INFO supervisord started with pid 1
+2026-02-09 20:25:55,412 INFO spawned: 'runserver' with pid 8
+2026-02-09 20:25:56,760 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:15:42,461 WARN received SIGTERM indicating exit request
+2026-02-09 22:15:42,463 INFO waiting for runserver to die
+2026-02-09 22:15:42,571 INFO stopped: runserver (exit status 0)
+2026-02-09 22:15:43,576 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:15:43,577 INFO supervisord started with pid 1
+2026-02-09 22:15:44,588 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:15:45,946 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:40:01,685 WARN received SIGTERM indicating exit request
+2026-02-09 22:40:01,687 INFO waiting for runserver to die
+2026-02-09 22:40:01,766 INFO stopped: runserver (exit status 0)
+2026-02-09 22:40:02,736 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:40:02,737 INFO supervisord started with pid 1
+2026-02-09 22:40:03,755 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:40:05,095 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:46:22,443 WARN received SIGTERM indicating exit request
+2026-02-09 22:46:22,446 INFO waiting for runserver to die
+2026-02-09 22:46:22,518 INFO stopped: runserver (exit status 0)
+2026-02-09 22:46:23,414 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:46:23,415 INFO supervisord started with pid 1
+2026-02-09 22:46:24,420 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:46:25,731 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:46:48,785 WARN received SIGTERM indicating exit request
+2026-02-09 22:46:48,787 INFO waiting for runserver to die
+2026-02-09 22:46:49,955 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:46:49,956 INFO supervisord started with pid 1
+2026-02-09 22:46:50,961 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:46:52,361 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:49:16,307 WARN received SIGTERM indicating exit request
+2026-02-09 22:49:16,308 INFO waiting for runserver to die
+2026-02-09 22:49:16,385 INFO stopped: runserver (exit status 0)
+2026-02-09 22:49:17,552 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:49:17,553 INFO supervisord started with pid 1
+2026-02-09 22:49:18,566 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:49:19,969 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:53:31,674 WARN received SIGTERM indicating exit request
+2026-02-09 22:53:31,677 INFO waiting for runserver to die
+2026-02-09 22:53:31,793 INFO stopped: runserver (exit status 0)
+2026-02-09 22:53:32,991 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:53:32,992 INFO supervisord started with pid 1
+2026-02-09 22:53:34,001 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:53:35,381 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:55:47,540 WARN received SIGTERM indicating exit request
+2026-02-09 22:55:47,542 INFO waiting for runserver to die
+2026-02-09 22:55:47,609 INFO stopped: runserver (exit status 0)
+2026-02-09 22:55:48,753 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:55:48,754 INFO supervisord started with pid 1
+2026-02-09 22:55:49,764 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:55:51,182 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 22:57:57,810 WARN received SIGTERM indicating exit request
+2026-02-09 22:57:57,814 INFO waiting for runserver to die
+2026-02-09 22:57:57,905 INFO stopped: runserver (exit status 0)
+2026-02-09 22:57:58,853 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 22:57:58,855 INFO supervisord started with pid 1
+2026-02-09 22:57:59,866 INFO spawned: 'runserver' with pid 8
+2026-02-09 22:58:01,246 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:00:38,136 WARN received SIGTERM indicating exit request
+2026-02-09 23:00:38,141 INFO waiting for runserver to die
+2026-02-09 23:00:38,257 INFO stopped: runserver (exit status 0)
+2026-02-09 23:00:39,266 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:00:39,267 INFO supervisord started with pid 1
+2026-02-09 23:00:40,275 INFO spawned: 'runserver' with pid 7
+2026-02-09 23:00:41,719 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:02:44,723 WARN received SIGTERM indicating exit request
+2026-02-09 23:02:44,726 INFO waiting for runserver to die
+2026-02-09 23:02:45,633 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:02:45,634 INFO supervisord started with pid 1
+2026-02-09 23:02:46,645 INFO spawned: 'runserver' with pid 8
+2026-02-09 23:02:48,142 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:05:04,859 WARN received SIGTERM indicating exit request
+2026-02-09 23:05:04,862 INFO waiting for runserver to die
+2026-02-09 23:05:04,983 INFO stopped: runserver (exit status 0)
+2026-02-09 23:05:05,853 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:05:05,854 INFO supervisord started with pid 1
+2026-02-09 23:05:06,864 INFO spawned: 'runserver' with pid 8
+2026-02-09 23:05:08,694 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:07:17,829 WARN received SIGTERM indicating exit request
+2026-02-09 23:07:17,830 INFO waiting for runserver to die
+2026-02-09 23:07:17,906 INFO stopped: runserver (exit status 0)
+2026-02-09 23:07:18,750 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:07:18,751 INFO supervisord started with pid 1
+2026-02-09 23:07:19,757 INFO spawned: 'runserver' with pid 8
+2026-02-09 23:07:21,186 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:11:12,453 WARN received SIGTERM indicating exit request
+2026-02-09 23:11:12,455 INFO waiting for runserver to die
+2026-02-09 23:11:12,562 INFO stopped: runserver (exit status 0)
+2026-02-09 23:11:13,405 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:11:13,407 INFO supervisord started with pid 1
+2026-02-09 23:11:14,414 INFO spawned: 'runserver' with pid 8
+2026-02-09 23:11:15,755 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:14:05,479 WARN received SIGTERM indicating exit request
+2026-02-09 23:14:05,483 INFO waiting for runserver to die
+2026-02-09 23:14:05,574 INFO stopped: runserver (exit status 0)
+2026-02-09 23:14:06,817 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:14:06,818 INFO supervisord started with pid 1
+2026-02-09 23:14:07,828 INFO spawned: 'runserver' with pid 8
+2026-02-09 23:14:09,193 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-09 23:16:48,419 WARN received SIGTERM indicating exit request
+2026-02-09 23:16:48,421 INFO waiting for runserver to die
+2026-02-09 23:16:48,528 INFO stopped: runserver (exit status 0)
+2026-02-09 23:16:49,695 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-09 23:16:49,696 INFO supervisord started with pid 1
+2026-02-09 23:16:50,714 INFO spawned: 'runserver' with pid 8
+2026-02-09 23:16:52,150 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-13 04:44:01,530 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-13 04:44:01,533 INFO supervisord started with pid 1
+2026-02-13 04:44:02,542 INFO spawned: 'runserver' with pid 17
+2026-02-13 04:44:04,363 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)
+2026-02-13 04:49:04,056 WARN received SIGTERM indicating exit request
+2026-02-13 04:49:04,058 INFO waiting for runserver to die
+2026-02-13 04:49:04,177 INFO stopped: runserver (exit status 0)
+2026-02-13 04:49:08,905 CRIT Supervisor is running as root.  Privileges were not dropped because no user is specified in the config file.  If you intend to run as root, you can set user=root in the config file to avoid this message.
+2026-02-13 04:49:08,911 INFO supervisord started with pid 1
+2026-02-13 04:49:09,928 INFO spawned: 'runserver' with pid 17
+2026-02-13 04:49:11,877 INFO success: runserver entered RUNNING state, process has stayed up for > than 1 seconds (startsecs)

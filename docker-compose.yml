@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  metis-orchestrate:
+    build:
+      context: ./backend/metis-orchestrate
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/metis-orchestrate:/app
+      - ./backend/common_utils:/app/common_utils
+    networks:
+      - custom_network
+
+
+  frontend:
+    build:
+      context: ./frontend      
+    restart: unless-stopped
+    env_file:
+      - ./frontend/.env
+    ports:
+      - "3000:3000"    
+    depends_on:
+      - metis-orchestrate
+    networks:
+      - custom_network
+
+  postgres_db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    profiles:
+      - local
+    environment:
+      POSTGRES_DB: metis_db
+      POSTGRES_USER: metis_user
+      POSTGRES_PASSWORD: metis_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - custom_network
+
+networks:
+  custom_network:
+    name: metis_custom_network
+
+volumes:
+  postgres_data:

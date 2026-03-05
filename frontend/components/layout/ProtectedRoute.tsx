@@ -22,16 +22,24 @@ export default function ProtectedRoute({ children }: Props) {
     }
     const access = authStorage.getAccess();
     if (!access || !user) {
+      authStorage.clear();
       dispatch(clearSession());
+      if (typeof window !== "undefined") {
+        window.location.replace("/");
+        return;
+      }
       router.replace("/");
     }
   }, [dispatch, ready, router, user]);
 
   if (!ready) {
     return (
-      <div className="route-loading" role="status" aria-live="polite">
-        <div className="route-loading-spinner" aria-hidden="true" />
-        <span className="route-loading-text">Preparing your workspace…</span>
+      <div className="route-loading" role="status" aria-live="polite" aria-label="Loading workspace">
+        <div className="route-loading-skeleton" aria-hidden="true">
+          <div className="ui-shimmer-line ui-shimmer-line--lg" />
+          <div className="ui-shimmer-line ui-shimmer-line--md" />
+          <div className="ui-shimmer-line ui-shimmer-line--sm" />
+        </div>
       </div>
     );
   }

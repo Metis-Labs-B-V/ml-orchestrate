@@ -23,10 +23,10 @@ Snapshot date: 2026-02-26
 - Impersonation (user selection + token swap + logs).
 - Tenants/customers/roles/permissions CRUD and assignment.
 - Activity + impersonation logs.
-- Shopify domain (`shopify`):
+- Orchestrate domain (`orchestrate`):
 - Connection CRUD.
 - Store CRUD.
-- Shopify OAuth install/callback.
+- Orchestrate OAuth install/callback.
 - Connection orders fetch.
 
 ### Frontend (Next.js)
@@ -34,7 +34,7 @@ Snapshot date: 2026-02-26
 - 29 page routes, including:
 - Auth routes (`/`, signup, forgot/reset, OTP, MFA setup, SSO callback).
 - Admin dashboard routes for tenants, clients, users, roles, settings, logs.
-- Shopify-specific routes (`/dashboard/connections`, `/dashboard/stores`, `/dashboard/shopify/[connectionId]/orders`).
+- Orchestrate-specific routes (`/dashboard/connections`, `/dashboard/stores`, `/dashboard/orchestrate/[connectionId]/orders`).
 - Role-aware dashboard navigation and permissions.
 - Tenant/client management UI (forms, lists, tabs, user assignment).
 - Connection/store management UI + modals.
@@ -49,7 +49,7 @@ Snapshot date: 2026-02-26
 A Make.com replica needs scenario/workflow orchestration primitives that do not exist yet:
 
 - Visual scenario builder (nodes/edges/canvas).
-- Trigger/action module registry abstraction (not hard-coded Shopify entities).
+- Trigger/action module registry abstraction (not hard-coded Orchestrate entities).
 - Execution engine with job queue + retries + backoff + concurrency controls.
 - Scheduler + webhook-trigger runtime.
 - Run history (per execution step logs, input/output snapshots, errors).
@@ -64,26 +64,26 @@ This is the recommended cleanup from current folder structure for a Make.com tra
 
 ### A. Remove first (high confidence)
 
-These are domain-locked to merchant/store/Shopify behavior and will create noise while building orchestration core.
+These are domain-locked to merchant/store/Orchestrate behavior and will create noise while building orchestration core.
 
-- Backend Shopify app:
-- `backend/metis-orchestrate/shopify/**`
+- Backend Orchestrate app:
+- `backend/metis-orchestrate/orchestrate/**`
 - Remove include from `backend/metis-orchestrate/core/urls.py`.
-- Frontend Shopify/store pages:
+- Frontend Orchestrate/store pages:
 - `frontend/pages/dashboard/connections.tsx`
 - `frontend/pages/dashboard/stores.tsx`
-- `frontend/pages/dashboard/shopify/[connectionId]/orders.tsx`
-- Frontend Shopify/store components:
+- `frontend/pages/dashboard/orchestrate/[connectionId]/orders.tsx`
+- Frontend Orchestrate/store components:
 - `frontend/components/connections/**`
 - `frontend/components/stores/**`
 - `frontend/components/clients/ClientOrdersTab.tsx`
-- Shopify/store Redux slices:
+- Orchestrate/store Redux slices:
 - `frontend/store/slices/connectionsSlice.ts`
 - `frontend/store/slices/storesSlice.ts`
 - `frontend/store/slices/clientStoresSlice.ts`
-- Shopify assets/constants:
-- `frontend/public/clients/shopify.svg`
-- `frontend/public/clients/bol.svg`
+- Orchestrate assets/constants:
+- `frontend/public/clients/orchestrate.svg`
+- `frontend/public/clients/orchestrate.svg`
 - `frontend/constants/assets.tsx`
 
 ### B. Comment out or feature-flag (short-term, then decide)
@@ -120,7 +120,7 @@ These are strong foundations for Make.com-style SaaS auth and governance.
 
 - Replace `tenant/customer/client` vocabulary with `workspace/project/environment`.
 - Keep service path naming aligned to `metis-orchestrate` across backend and compose config.
-- Replace UI copy like "Bolify", "merchant integrations", "stores", "connections" with "scenarios", "modules", "runs", "webhooks".
+- Replace UI copy like "Orchestrate", "merchant integrations", "stores", "connections" with "scenarios", "modules", "runs", "webhooks".
 
 ## 6) Suggested Build Order (after cleanup)
 
@@ -132,6 +132,6 @@ These are strong foundations for Make.com-style SaaS auth and governance.
 
 ## 7) Quick Risk Notes
 
-- If Shopify removal is done without cleaning references in `frontend/store/index.ts`, `frontend/lib/apiPaths.ts`, and dashboard nav, build will fail.
-- If backend shopify app is removed, remove URL includes and app registration from settings before migration cleanup.
-- Migrations currently include Shopify and customer entities; plan migration strategy before deleting models in production environments.
+- If Orchestrate removal is done without cleaning references in `frontend/store/index.ts`, `frontend/lib/apiPaths.ts`, and dashboard nav, build will fail.
+- If backend orchestrate app is removed, remove URL includes and app registration from settings before migration cleanup.
+- Migrations currently include Orchestrate and customer entities; plan migration strategy before deleting models in production environments.

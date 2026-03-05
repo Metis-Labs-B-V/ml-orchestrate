@@ -20,9 +20,9 @@ def send_tenant_signup_verification_email(user):
 
     frontend_url = settings.FRONTEND_BASE_URL
     verify_url = f"{frontend_url}/tenant/verify-email?token={token}"
-    support_email = os.getenv("SUPPORT_EMAIL", "support@bolify.com")
+    support_email = os.getenv("SUPPORT_EMAIL", "support@orchestrate.com")
     html = tenant_verification_email(user.first_name, verify_url, support_email)
-    res = send_email(user.email, "Verify your email to activate your Bolify account", html)
+    res = send_email(user.email, "Verify your email to activate your Orchestrate account", html)
     print(f"Sent verification email, result: {res}")
     return res
 
@@ -31,7 +31,7 @@ def send_one_time_password_email(user):
     otp = 999999 if settings.DEBUG and user.email.startswith("test__") else str(random.randint(100000, 999999))
     LoginOTP.objects.create(user=user, otp=otp, expires_at=timezone.now() + timedelta(minutes=10))
     html = login_otp_email(user.first_name, otp)
-    send_email(user.email, "Your one-time password for Bolify", html)
+    send_email(user.email, "Your one-time password for Orchestrate", html)
 
 
 def send_password_reset_link(user, subject="Set your password"):
@@ -63,14 +63,14 @@ def send_user_account_setup_email(user):
     
     if user.user_type == UserTypeChoices.TENANT.value:
         user_tenant = user.tenants.first()
-        client_name = user_tenant.tenant.name if user_tenant else "Bolify"
+        client_name = user_tenant.tenant.name if user_tenant else "Orchestrate"
     elif user.user_type == UserTypeChoices.CUSTOMER.value:
         user_customer = user.customers.first()
-        client_name = user_customer.customer.name if user_customer else "Bolify"
+        client_name = user_customer.customer.name if user_customer else "Orchestrate"
     else:
-        client_name = "Bolify"
+        client_name = "Orchestrate"
 
-    support_email = os.getenv("SUPPORT_EMAIL", "support@bolify.com")
+    support_email = os.getenv("SUPPORT_EMAIL", "support@orchestrate.com")
     html = user_account_setup_email_template(user.first_name, setup_url, client_name, support_email)
-    send_email(user.email, "Welcome to Bolify - Set up your account", html)
+    send_email(user.email, "Welcome to Orchestrate - Set up your account", html)
     return token

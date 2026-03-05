@@ -10,5 +10,6 @@ class HealthCheckTests(TestCase):
         response = self.client.get("/health/")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload.get("status"), "ok")
-        self.assertEqual(payload.get("service"), "metis-orchestrate")
+        self.assertEqual(payload.get("status"), "success")
+        self.assertEqual(payload.get("message"), "ok")
+        self.assertEqual(payload.get("data", {}).get("service"), "metis-orchestrate")

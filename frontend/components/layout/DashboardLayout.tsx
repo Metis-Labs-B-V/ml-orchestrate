@@ -4,7 +4,7 @@ import { useTheme } from "next-themes";
 import { useRouter, usePathname } from "next/navigation";
 import {
   Bell,
-  Globe,
+  GitBranch,
   LayoutDashboard,
   ListChecks,
   LogOut,
@@ -41,7 +41,6 @@ import {
 import { useI18n } from "../../lib/i18n";
 import {
   hasAuditAccess,
-  hasTenantWriteAccess,
   hasUserAccess,
 } from "../../lib/roles";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
@@ -79,7 +78,6 @@ export default function DashboardLayout({ title, description, hideHeader, childr
   const avatarUrl = user?.avatar_url || "";
   const isSuperAdmin = Boolean(user?.is_superuser);
   const canManageUsers = hasUserAccess(user);
-  const canManageClients = hasTenantWriteAccess(user);
   const canViewLogs = hasAuditAccess(user);
   const isDark = (resolvedTheme ?? theme) === "dark";
   const navItems = useMemo(
@@ -87,9 +85,7 @@ export default function DashboardLayout({ title, description, hideHeader, childr
       ...(isSuperAdmin
         ? [{ label: t("nav.tenants"), href: "/dashboard/tenants", icon: LayoutDashboard }]
         : []),
-      ...(canManageClients
-        ? [{ label: t("nav.clients"), href: "/dashboard/clients", icon: Globe }]
-        : []),
+      { label: t("nav.scenarios"), href: "/dashboard/scenarios", icon: GitBranch },
       ...(canManageUsers
         ? [{ label: t("nav.users"), href: "/dashboard/my-users", icon: Users }]
         : []),
@@ -112,7 +108,7 @@ export default function DashboardLayout({ title, description, hideHeader, childr
         ]
         : []),
     ],
-    [canManageClients, canManageUsers, canViewLogs, isSuperAdmin, t]
+    [canManageUsers, canViewLogs, isSuperAdmin, t]
   );
 
   useEffect(() => {
@@ -157,7 +153,7 @@ export default function DashboardLayout({ title, description, hideHeader, childr
           <MLSidebarHeader className="sidebar-header">
             <div className="sidebar-logo">
               <MLSidebarTrigger className="sidebar-logo-trigger" aria-label="Toggle sidebar" />
-              <img src="/brand-logo.svg" alt="Bolify" className="sidebar-logo-image" />
+              <img src="/brand-logo.svg" alt="Orchestrate" className="sidebar-logo-image" />
               <MLCardTitle className="sidebar-logo-title">{t("layout.title")}</MLCardTitle>
             </div>
           </MLSidebarHeader>

@@ -118,6 +118,16 @@ DATABASES = {
     }
 }
 
+db_options = {}
+db_ssl_mode = os.getenv("DB_SSL_MODE")
+db_channel_binding = os.getenv("DB_CHANNEL_BINDING")
+if db_ssl_mode:
+    db_options["sslmode"] = db_ssl_mode
+if db_channel_binding:
+    db_options["channel_binding"] = db_channel_binding
+if db_options:
+    DATABASES["default"]["OPTIONS"] = db_options
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -183,3 +193,37 @@ SIMPLE_JWT = {
 
 JWE_ENABLED = os.getenv("JWE_ENABLED", "true").lower() in ("1", "true", "yes")
 JWE_SECRET = os.getenv("JWE_SECRET", "")
+ORCHESTRATE_DEFAULT_POLL_INTERVAL_MINUTES = int(
+    os.getenv("ORCHESTRATE_DEFAULT_POLL_INTERVAL_MINUTES", "15")
+)
+ORCHESTRATE_RUN_RETENTION_DAYS = int(os.getenv("ORCHESTRATE_RUN_RETENTION_DAYS", "30"))
+ORCHESTRATE_ALLOW_CYCLES = os.getenv("ORCHESTRATE_ALLOW_CYCLES", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+JIRA_API_TIMEOUT_SECONDS = int(os.getenv("JIRA_API_TIMEOUT_SECONDS", "30"))
+ORCHESTRATE_HTTP_TIMEOUT_SECONDS = int(os.getenv("ORCHESTRATE_HTTP_TIMEOUT_SECONDS", "30"))
+JIRA_OAUTH_AUTHORIZE_URL = os.getenv(
+    "JIRA_OAUTH_AUTHORIZE_URL", "https://auth.atlassian.com/authorize"
+)
+JIRA_OAUTH_TOKEN_URL = os.getenv(
+    "JIRA_OAUTH_TOKEN_URL", "https://auth.atlassian.com/oauth/token"
+)
+JIRA_OAUTH_ACCESSIBLE_RESOURCES_URL = os.getenv(
+    "JIRA_OAUTH_ACCESSIBLE_RESOURCES_URL",
+    "https://api.atlassian.com/oauth/token/accessible-resources",
+)
+JIRA_OAUTH_CLIENT_ID = os.getenv("JIRA_OAUTH_CLIENT_ID", "")
+JIRA_OAUTH_CLIENT_SECRET = os.getenv("JIRA_OAUTH_CLIENT_SECRET", "")
+JIRA_OAUTH_REDIRECT_URI = os.getenv("JIRA_OAUTH_REDIRECT_URI", "")
+JIRA_OAUTH_SCOPES = env_list(
+    "JIRA_OAUTH_SCOPES",
+    "read:jira-user,read:jira-work,write:jira-work,offline_access",
+)
+JENKINS_OAUTH_AUTHORIZE_URL = os.getenv("JENKINS_OAUTH_AUTHORIZE_URL", "")
+JENKINS_OAUTH_TOKEN_URL = os.getenv("JENKINS_OAUTH_TOKEN_URL", "")
+JENKINS_OAUTH_CLIENT_ID = os.getenv("JENKINS_OAUTH_CLIENT_ID", "")
+JENKINS_OAUTH_CLIENT_SECRET = os.getenv("JENKINS_OAUTH_CLIENT_SECRET", "")
+JENKINS_OAUTH_REDIRECT_URI = os.getenv("JENKINS_OAUTH_REDIRECT_URI", "")
+JENKINS_OAUTH_SCOPES = env_list("JENKINS_OAUTH_SCOPES", "")

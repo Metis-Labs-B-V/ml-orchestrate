@@ -79,7 +79,7 @@ export default function Home() {
 
   useEffect(() => {
     if (sessionUser && !sessionUser.is_superuser) {
-      router.replace("/dashboard");
+      router.replace("/dashboard/scenarios");
     }
   }, [router, sessionUser]);
 
@@ -118,11 +118,20 @@ export default function Home() {
       }
       return;
     }
-    if (data?.access && data?.refresh) {
+    if (data?.access && data?.refresh && data?.user) {
       const superuser = Boolean(data?.user?.is_superuser);
       if (!superuser) {
-        await router.push("/dashboard");
+        await router.push("/dashboard/scenarios");
       }
+      return;
+    }
+    if (data?.access && data?.refresh && !data?.user) {
+      dispatch(
+        updateField({
+          field: "error",
+          value: "Login response is missing user profile. Please contact support.",
+        }),
+      );
     }
   };
 
@@ -134,7 +143,7 @@ export default function Home() {
       .unwrap()
       .catch(() => null);
     if (result) {
-      await router.push("/dashboard");
+      await router.push("/dashboard/scenarios");
     }
   };
 
@@ -175,7 +184,7 @@ export default function Home() {
       .unwrap()
       .catch(() => null);
     if (result) {
-      await router.push("/dashboard");
+      await router.push("/dashboard/scenarios");
     }
   };
 

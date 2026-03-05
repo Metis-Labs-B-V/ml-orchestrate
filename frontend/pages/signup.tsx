@@ -48,7 +48,7 @@ export default function Signup() {
     }
     const result = await dispatch(signupUser(form)).unwrap().catch(() => null);
     if (result) {
-      await router.push("/dashboard");
+      await router.push("/dashboard/scenarios");
     }
   };
 

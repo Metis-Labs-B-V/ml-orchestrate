@@ -1,23 +1,18 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { authStorage } from "../lib/auth";
 import type { DashboardPage } from "../types/dashboard";
 
 const Dashboard: DashboardPage = () => {
   const router = useRouter();
-  const [isSuperAdmin, setIsSuperAdmin] = useState<boolean | null>(null);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const user = authStorage.getUser();
-    const superAdmin = Boolean(user?.is_superuser);
-    setIsSuperAdmin(superAdmin);
-    if (superAdmin) {
-      router.replace("/dashboard/tenants");
-    }
+    setIsReady(true);
+    router.replace("/dashboard/scenarios");
   }, [router]);
 
-  if (isSuperAdmin !== false) {
+  if (!isReady) {
     return null;
   }
 

@@ -60,9 +60,53 @@ python manage.py migrate
 python manage.py runserver 127.0.0.1:8001
 ```
 
+## Bootstrap MVP User + Required Identity Data
+
+Run this once after migrations to create/update a working login user and required
+tenant/workspace/role data for Metis Orchestrate MVP:
+
+```bash
+cd metis-orchestrate
+./scripts/bootstrap_mvp_user.sh
+```
+
+Default seeded credentials:
+- Email: `deepak.kushwaha@metislabs.eu`
+- Password: `Admin@123456`
+
+Environment overrides:
+
+```bash
+BOOTSTRAP_EMAIL=you@company.com \
+BOOTSTRAP_PASSWORD='StrongPass@1234' \
+BOOTSTRAP_TENANT_NAME='Metis Orchestrate' \
+BOOTSTRAP_WORKSPACE_NAME='Metis Orchestrate Workspace' \
+./scripts/bootstrap_mvp_user.sh
+```
+
 ## Environment Settings
 
 Shared backend env variables are loaded from `backend/.env`.
+
+For scenario graph validation:
+
+```bash
+ORCHESTRATE_ALLOW_CYCLES=false
+ORCHESTRATE_HTTP_TIMEOUT_SECONDS=30
+JIRA_OAUTH_AUTHORIZE_URL=https://auth.atlassian.com/authorize
+JIRA_OAUTH_TOKEN_URL=https://auth.atlassian.com/oauth/token
+JIRA_OAUTH_ACCESSIBLE_RESOURCES_URL=https://api.atlassian.com/oauth/token/accessible-resources
+JIRA_OAUTH_CLIENT_ID=<atlassian-client-id>
+JIRA_OAUTH_CLIENT_SECRET=<atlassian-client-secret>
+JIRA_OAUTH_REDIRECT_URI=http://localhost:3000/dashboard/integrations/jira/oauth-callback
+JIRA_OAUTH_SCOPES=read:jira-user,read:jira-work,write:jira-work,offline_access
+JENKINS_OAUTH_AUTHORIZE_URL=https://<your-provider>/oauth/authorize
+JENKINS_OAUTH_TOKEN_URL=https://<your-provider>/oauth/token
+JENKINS_OAUTH_CLIENT_ID=<client-id>
+JENKINS_OAUTH_CLIENT_SECRET=<client-secret>
+JENKINS_OAUTH_REDIRECT_URI=http://localhost:3000/dashboard/integrations/jenkins/oauth-callback
+JENKINS_OAUTH_SCOPES=read,write
+```
 
 ## Azure App Service Logs (If Using Azure)
 

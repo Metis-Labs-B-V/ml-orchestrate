@@ -87,7 +87,7 @@ export default function VerifyOtpPage() {
                 .catch(() => null);
               if (result) {
                 dispatch(showSuccess("Signed in successfully."));
-                router.push("/dashboard");
+                router.push("/dashboard/scenarios");
               }
             }}
           >

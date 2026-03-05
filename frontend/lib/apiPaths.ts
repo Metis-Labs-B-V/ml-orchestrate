@@ -1,4 +1,6 @@
 const API_V1 = "/api/v1";
+const ORCHESTRATE_PREFIX =
+  process.env.NEXT_PUBLIC_SERVICE1_PATH_PREFIX || `${API_V1}/metis-orchestrate`;
 
 const withQuery = (path: string, query?: string) => {
   if (!query) {
@@ -75,4 +77,37 @@ export const API_PATHS = {
     withQuery(`${API_V1}/activity/logs/`, query),
   impersonationLogs: (query?: string) =>
     withQuery(`${API_V1}/impersonation/logs/`, query),
+  integrations: {
+    catalog: `${ORCHESTRATE_PREFIX}/integrations/catalog/`,
+    jiraOauthStart: `${ORCHESTRATE_PREFIX}/integrations/jira/oauth/start/`,
+    jiraOauthExchange: `${ORCHESTRATE_PREFIX}/integrations/jira/oauth/exchange/`,
+    jenkinsOauthStart: `${ORCHESTRATE_PREFIX}/integrations/jenkins/oauth/start/`,
+    jenkinsOauthExchange: `${ORCHESTRATE_PREFIX}/integrations/jenkins/oauth/exchange/`,
+  },
+  scenarios: {
+    list: (query?: string) => withQuery(`${ORCHESTRATE_PREFIX}/scenarios/`, query),
+    detail: (scenarioId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/`,
+    publish: (scenarioId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/publish/`,
+    activate: (scenarioId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/activate/`,
+    deactivate: (scenarioId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/deactivate/`,
+    schedules: (scenarioId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/schedules/`,
+    scheduleDetail: (scenarioId: string | number, scheduleId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/schedules/${scheduleId}/`,
+  },
+  connections: {
+    list: (query?: string) => withQuery(`${ORCHESTRATE_PREFIX}/connections/`, query),
+    detail: (connectionId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/connections/${connectionId}/`,
+    test: (connectionId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/connections/${connectionId}/test/`,
+  },
+  runs: {
+    create: `${ORCHESTRATE_PREFIX}/runs/`,
+    detail: (runId: string | number) => `${ORCHESTRATE_PREFIX}/runs/${runId}/`,
+  },
 };

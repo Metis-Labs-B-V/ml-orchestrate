@@ -264,7 +264,7 @@ class CustomerUserView(APIView):
         )
         should_invite = bool(send_invite) if send_invite is not None else not payload.get("password")
         if should_invite:
-            send_password_reset_link(user, subject="Set your Bolify password")
+            send_password_reset_link(user, subject="Set your Orchestrate password")
             log_activity(
                 actor=request.user,
                 module="user",

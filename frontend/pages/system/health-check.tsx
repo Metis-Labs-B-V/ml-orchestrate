@@ -68,7 +68,7 @@ export default function Home() {
       <MLTypography as="div" className="background-orb orb-two" />
       <section className="hero">
         <MLTypography as="div" variant="body-xs-regular" className="eyebrow">
-          Bolify
+          Orchestrate
         </MLTypography>
         <MLTypography as="h1" variant="h1">
           Dual Service Starter

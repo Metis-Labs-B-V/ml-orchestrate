@@ -24,7 +24,7 @@ export default function SsoCallback() {
     dispatch(exchangeSsoToken({ token }))
       .unwrap()
       .then(() => {
-        router.replace("/dashboard");
+        router.replace("/dashboard/scenarios");
       })
       .catch(() => null);
   }, [dispatch, router, token]);

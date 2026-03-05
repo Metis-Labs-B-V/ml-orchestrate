@@ -7,6 +7,36 @@ function getBaseUrl() {
   return process.env.NEXT_PUBLIC_SERVICE1_BASE_URL || "";
 }
 
+function forceClientLogout() {
+  authStorage.clear();
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard")) {
+    window.location.replace("/");
+  }
+}
+
+async function isTokenInvalidOrBlacklisted(response: Response) {
+  if (![401, 403].includes(response.status)) {
+    return false;
+  }
+  let payload: unknown = null;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return response.status === 401;
+  }
+  const asText = JSON.stringify(payload).toLowerCase();
+  if (!asText.includes("token")) {
+    return response.status === 401;
+  }
+  return (
+    asText.includes("expired")
+    || asText.includes("not valid")
+    || asText.includes("blacklist")
+    || asText.includes("blacklisted")
+    || asText.includes("token_not_valid")
+  );
+}
+
 async function refreshAccessToken() {
   const refresh = authStorage.getRefresh();
   if (!refresh) {
@@ -73,8 +103,18 @@ export async function apiFetch(
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       headers.set("Authorization", `Bearer ${refreshed}`);
-      return fetchWithTimeout(`${baseUrl}${path}`, { ...init, headers });
+      const retryResponse = await fetchWithTimeout(`${baseUrl}${path}`, { ...init, headers });
+      if (await isTokenInvalidOrBlacklisted(retryResponse)) {
+        forceClientLogout();
+      }
+      return retryResponse;
     }
+    forceClientLogout();
+    return response;
+  }
+
+  if (options.auth && (await isTokenInvalidOrBlacklisted(response))) {
+    forceClientLogout();
   }
 
   return response;

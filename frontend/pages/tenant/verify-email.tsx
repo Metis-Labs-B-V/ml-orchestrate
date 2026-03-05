@@ -22,7 +22,7 @@ export default function VerifyEmail() {
       .unwrap()
       .then((result) => {
         if (result?.shouldRedirect) {
-          router.replace('/dashboard');
+          router.replace('/dashboard/scenarios');
         }
       })
       .catch(() => null);
@@ -38,7 +38,17 @@ export default function VerifyEmail() {
     dispatch(resendVerification({ email }));
   };
 
-  if (status === 'loading') return <div>Verifying...</div>;
+  if (status === 'loading') {
+    return (
+      <section className="verify-email-shell" role="status" aria-live="polite" aria-label="Verifying email">
+        <div className="verify-email-card verify-email-card--loading" aria-hidden="true">
+          <div className="ui-shimmer-line ui-shimmer-line--lg" />
+          <div className="ui-shimmer-line ui-shimmer-line--md" />
+          <div className="ui-shimmer-line ui-shimmer-line--sm" />
+        </div>
+      </section>
+    );
+  }
   if (status === 'success') return <div>{message}</div>;
   if (status === 'invalid') return <div>{message}</div>;
   if (status === 'expired') return (

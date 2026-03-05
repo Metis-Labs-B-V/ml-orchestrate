@@ -20,10 +20,15 @@ export const hydrateSession = createAsyncThunk("session/hydrate", async () => {
   if (typeof window === "undefined") {
     return { user: null, impersonator: null };
   }
-  return {
-    user: authStorage.getUser(),
-    impersonator: authStorage.getImpersonator(),
-  };
+  try {
+    return {
+      user: authStorage.getUser(),
+      impersonator: authStorage.getImpersonator(),
+    };
+  } catch {
+    authStorage.clear();
+    return { user: null, impersonator: null };
+  }
 });
 
 export const logoutSession = createAsyncThunk("session/logout", async () => {
@@ -66,20 +71,28 @@ const sessionSlice = createSlice({
     clearSession(state) {
       state.user = null;
       state.impersonator = null;
-      state.ready = false;
+      state.ready = true;
     },
   },
   extraReducers: (builder) => {
     builder
+      .addCase(hydrateSession.pending, (state) => {
+        state.ready = false;
+      })
       .addCase(hydrateSession.fulfilled, (state, action) => {
         state.user = action.payload.user;
         state.impersonator = action.payload.impersonator;
         state.ready = true;
       })
+      .addCase(hydrateSession.rejected, (state) => {
+        state.user = null;
+        state.impersonator = null;
+        state.ready = true;
+      })
       .addCase(logoutSession.fulfilled, (state) => {
         state.user = null;
         state.impersonator = null;
-        state.ready = false;
+        state.ready = true;
       })
       .addCase(validateSession.pending, (state) => {
         state.ready = false;

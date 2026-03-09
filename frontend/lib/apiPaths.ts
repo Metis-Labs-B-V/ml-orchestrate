@@ -102,6 +102,12 @@ export const API_PATHS = {
     list: (query?: string) => withQuery(`${ORCHESTRATE_PREFIX}/scenarios/`, query),
     detail: (scenarioId: string | number) =>
       `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/`,
+    historySummary: (scenarioId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/history/summary/`,
+    historyRuns: (scenarioId: string | number, query?: string) =>
+      withQuery(`${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/history/runs/`, query),
+    historyAudit: (scenarioId: string | number, query?: string) =>
+      withQuery(`${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/history/audit/`, query),
     publish: (scenarioId: string | number) =>
       `${ORCHESTRATE_PREFIX}/scenarios/${scenarioId}/publish/`,
     activate: (scenarioId: string | number) =>

@@ -40,8 +40,10 @@ from app.serializers import (
     EmailTemplateTestSendSerializer,
     EmailTemplateVersionSerializer,
     RunDetailSerializer,
+    RunHistoryListSerializer,
     RunSerializer,
     SampleItemSerializer,
+    ScenarioAuditEventSerializer,
     ScenarioScheduleSerializer,
     ScenarioSerializer,
     ScenarioVersionSerializer,
@@ -49,6 +51,12 @@ from app.serializers import (
 from app.services.connection_secrets import (
     ConnectionSecretError,
     get_connection_secret_payload,
+)
+from app.services.history import (
+    build_scenario_history_summary,
+    filter_scenario_audit_events,
+    filter_scenario_runs,
+    record_scenario_audit_event,
 )
 from app.services.email_templates import (
     EmailTemplateServiceError,
@@ -659,6 +667,18 @@ class ScenarioViewSet(viewsets.ModelViewSet):
                 request=request,
             )
         scenario = serializer.save()
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.created",
+            event_label="Scenario created",
+            payload={
+                "name": scenario.name,
+                "status": scenario.status,
+                "tenant_id": scenario.tenant_id,
+                "workspace_id": scenario.workspace_id,
+            },
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data=self.get_serializer(scenario).data,
             message="Scenario created",
@@ -677,6 +697,14 @@ class ScenarioViewSet(viewsets.ModelViewSet):
                 request=request,
             )
         scenario = serializer.save()
+        changed_fields = sorted(set(request.data.keys()))
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.updated",
+            event_label="Scenario updated",
+            payload={"changed_fields": changed_fields},
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data=self.get_serializer(scenario).data,
             message="Scenario updated",
@@ -718,6 +746,17 @@ class ScenarioViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.published",
+            event_label=f"Scenario published as version {next_version}",
+            payload={
+                "version": next_version,
+                "node_count": len(graph_json.get("nodes", [])),
+                "edge_count": len(graph_json.get("edges", [])),
+            },
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data={
                 "scenario": self.get_serializer(scenario).data,
@@ -733,6 +772,13 @@ class ScenarioViewSet(viewsets.ModelViewSet):
         scenario.status = ScenarioStatus.ACTIVE
         scenario.activated_at = timezone.now()
         scenario.save(update_fields=["status", "activated_at", "updated_at"])
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.activated",
+            event_label="Scenario activated",
+            payload={"status": scenario.status},
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data=self.get_serializer(scenario).data,
             message="Scenario activated",
@@ -744,9 +790,70 @@ class ScenarioViewSet(viewsets.ModelViewSet):
         scenario = self.get_object()
         scenario.status = ScenarioStatus.INACTIVE
         scenario.save(update_fields=["status", "updated_at"])
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.deactivated",
+            event_label="Scenario deactivated",
+            payload={"status": scenario.status},
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data=self.get_serializer(scenario).data,
             message="Scenario deactivated",
+            request=request,
+        )
+
+    @action(detail=True, methods=["get"], url_path="history/summary")
+    def history_summary(self, request, pk=None):
+        scenario = self.get_object()
+        summary = build_scenario_history_summary(scenario)
+        return success_response(data=summary, request=request)
+
+    @action(detail=True, methods=["get"], url_path="history/runs")
+    def history_runs(self, request, pk=None):
+        scenario = self.get_object()
+        queryset = (
+            scenario.runs.select_related("tenant", "workspace")
+            .prefetch_related("steps")
+            .all()
+        )
+        queryset = filter_scenario_runs(
+            queryset,
+            status_value=request.query_params.get("status"),
+            trigger_type=request.query_params.get("trigger_type"),
+            provider=request.query_params.get("provider"),
+            search=request.query_params.get("search"),
+        )
+        page = self.paginate_queryset(queryset)
+        serializer_class = RunHistoryListSerializer
+        if page is not None:
+            serializer = serializer_class(page, many=True)
+            payload = self.get_paginated_response(serializer.data).data
+            return success_response(data=payload, request=request)
+        serializer = serializer_class(queryset, many=True)
+        return success_response(
+            data={"items": serializer.data, "count": len(serializer.data)},
+            request=request,
+        )
+
+    @action(detail=True, methods=["get"], url_path="history/audit")
+    def history_audit(self, request, pk=None):
+        scenario = self.get_object()
+        queryset = scenario.audit_events.select_related("run").all()
+        queryset = filter_scenario_audit_events(
+            queryset,
+            event_type=request.query_params.get("event_type"),
+            search=request.query_params.get("search"),
+        )
+        page = self.paginate_queryset(queryset)
+        serializer_class = ScenarioAuditEventSerializer
+        if page is not None:
+            serializer = serializer_class(page, many=True)
+            payload = self.get_paginated_response(serializer.data).data
+            return success_response(data=payload, request=request)
+        serializer = serializer_class(queryset, many=True)
+        return success_response(
+            data={"items": serializer.data, "count": len(serializer.data)},
             request=request,
         )
 
@@ -800,6 +907,18 @@ class ScenarioScheduleListCreateView(APIView):
         ):
             schedule.next_run_at = timezone.now()
             schedule.save(update_fields=["next_run_at", "updated_at"])
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.schedule.created",
+            event_label="Schedule created",
+            payload={
+                "schedule_id": schedule.id,
+                "trigger_type": schedule.trigger_type,
+                "interval_minutes": schedule.interval_minutes,
+                "is_active": schedule.is_active,
+            },
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data=ScenarioScheduleSerializer(schedule).data,
             message="Scenario schedule created",
@@ -852,6 +971,19 @@ class ScenarioScheduleDetailView(APIView):
         ):
             schedule.next_run_at = timezone.now()
             schedule.save(update_fields=["next_run_at", "updated_at"])
+        record_scenario_audit_event(
+            scenario,
+            event_type="scenario.schedule.updated",
+            event_label="Schedule updated",
+            payload={
+                "schedule_id": schedule.id,
+                "trigger_type": schedule.trigger_type,
+                "interval_minutes": schedule.interval_minutes,
+                "is_active": schedule.is_active,
+                "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
+            },
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         return success_response(
             data=ScenarioScheduleSerializer(schedule).data,
             message="Scenario schedule updated",
@@ -1353,6 +1485,19 @@ class RunViewSet(
             )
         run = serializer.save(status=RunStatus.QUEUED, queued_at=timezone.now())
         enqueue_manual_run(run)
+        record_scenario_audit_event(
+            run.scenario,
+            event_type="scenario.run.queued",
+            event_label=f"Manual run #{run.id} queued",
+            payload={
+                "run_id": run.id,
+                "trigger_type": run.trigger_type,
+                "scenario_version": run.scenario_version,
+                "status": run.status,
+            },
+            run=run,
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
         payload = RunSerializer(run).data
         return success_response(
             data=payload,

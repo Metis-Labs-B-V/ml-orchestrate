@@ -68,6 +68,25 @@ class ScenarioVersion(BaseModel):
         ]
 
 
+class ScenarioAuditEvent(BaseModel):
+    scenario = models.ForeignKey(
+        Scenario, on_delete=models.CASCADE, related_name="audit_events"
+    )
+    run = models.ForeignKey(
+        "Run",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="audit_events",
+    )
+    event_type = models.CharField(max_length=100, db_index=True)
+    event_label = models.CharField(max_length=255)
+    payload_json = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 class ScheduleTriggerType(models.TextChoices):
     POLLING = "polling", "Polling"
     WEBHOOK = "webhook", "Webhook"

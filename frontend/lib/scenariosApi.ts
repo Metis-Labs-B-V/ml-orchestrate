@@ -43,6 +43,35 @@ export type RunSummary = {
   updated_at: string;
 };
 
+export type RunHistorySummary = {
+  total_runs: number;
+  status_counts: Record<string, number>;
+  success_rate: number;
+  average_duration_ms: number;
+  last_run: number | null;
+  last_failed_run: number | null;
+  providers_used: Record<string, number>;
+};
+
+export type RunHistoryListItem = RunSummary & {
+  duration_ms: number;
+  step_counts: Record<string, number>;
+  first_error_message: string;
+  providers_used: string[];
+};
+
+export type ScenarioAuditEvent = {
+  id: number;
+  scenario_id: number;
+  run_id: number | null;
+  event_type: string;
+  event_label: string;
+  payload_json: Record<string, unknown>;
+  actor_email: string;
+  created_at: string;
+  updated_at: string;
+};
+
 function buildQuery(params: Record<string, string | number | undefined | null>) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -98,6 +127,78 @@ export async function getScenario(scenarioId: string | number): Promise<Scenario
     throw new Error("Scenario not found.");
   }
   return payload.data;
+}
+
+export async function getScenarioHistorySummary(
+  scenarioId: string | number
+): Promise<RunHistorySummary> {
+  const response = await apiFetch(API_PATHS.scenarios.historySummary(scenarioId));
+  const payload = await parseEnvelope<RunHistorySummary>(response);
+  return (
+    payload.data || {
+      total_runs: 0,
+      status_counts: {},
+      success_rate: 0,
+      average_duration_ms: 0,
+      last_run: null,
+      last_failed_run: null,
+      providers_used: {},
+    }
+  );
+}
+
+export async function listScenarioHistoryRuns(
+  scenarioId: string | number,
+  filters: {
+    status?: string | null;
+    trigger_type?: string | null;
+    provider?: string | null;
+    search?: string | null;
+  } = {}
+): Promise<{ items: RunHistoryListItem[]; count: number }> {
+  const query = buildQuery(filters);
+  const response = await apiFetch(API_PATHS.scenarios.historyRuns(scenarioId, query));
+  const payload = await parseEnvelope<{
+    items?: RunHistoryListItem[];
+    results?: RunHistoryListItem[];
+    count?: number;
+  }>(response);
+  if (Array.isArray(payload.data?.results)) {
+    return {
+      items: payload.data.results || [],
+      count: Number(payload.data.count || 0),
+    };
+  }
+  return {
+    items: payload.data?.items || [],
+    count: Number(payload.data?.count || 0),
+  };
+}
+
+export async function listScenarioAuditEvents(
+  scenarioId: string | number,
+  filters: {
+    search?: string | null;
+    event_type?: string | null;
+  } = {}
+): Promise<{ items: ScenarioAuditEvent[]; count: number }> {
+  const query = buildQuery(filters);
+  const response = await apiFetch(API_PATHS.scenarios.historyAudit(scenarioId, query));
+  const payload = await parseEnvelope<{
+    items?: ScenarioAuditEvent[];
+    results?: ScenarioAuditEvent[];
+    count?: number;
+  }>(response);
+  if (Array.isArray(payload.data?.results)) {
+    return {
+      items: payload.data.results || [],
+      count: Number(payload.data.count || 0),
+    };
+  }
+  return {
+    items: payload.data?.items || [],
+    count: Number(payload.data?.count || 0),
+  };
 }
 
 export async function createScenario(payload: {

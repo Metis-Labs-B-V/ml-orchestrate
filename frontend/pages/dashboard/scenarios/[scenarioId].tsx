@@ -31,6 +31,7 @@ import NodeContextMenu, {
   type ContextMenuEntry,
   type ContextMenuState,
 } from "../../../components/scenarios/NodeContextMenu";
+import ScenarioHistoryExplorer from "../../../components/scenarios/ScenarioHistoryExplorer";
 import {
   createApiTokenConnection,
   startJiraOauth,
@@ -1219,6 +1220,9 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const scenarioId = useMemo(() => getScenarioIdFromPath(pathname), [pathname]);
 
   const [scenario, setScenario] = useState<ScenarioRecord | null>(null);
+  const [activeScenarioView, setActiveScenarioView] = useState<"canvas" | "history" | "audit">(
+    "canvas"
+  );
   const [catalog, setCatalog] = useState<IntegrationCatalog>({
     categories: DEFAULT_CATEGORIES,
     apps: [],
@@ -1447,6 +1451,17 @@ const ScenarioCanvasPage: DashboardPage = () => {
     });
     return map;
   }, [graph.nodes]);
+
+  const handleJumpToCanvasNode = useCallback(
+    (nodeId: string) => {
+      setActiveScenarioView("canvas");
+      setSelectedNodeId(nodeId);
+      setSelectedEdgeId("");
+      setConnectionDraft(null);
+      closeContextMenu();
+    },
+    [closeContextMenu]
+  );
 
   const flowTailNode = useMemo(
     () => getFlowTailNode(graph.nodes, graph.edges),
@@ -3945,6 +3960,28 @@ const ScenarioCanvasPage: DashboardPage = () => {
         </div>
       </div>
 
+      <div className="scenario-view-tabs" role="tablist" aria-label="Scenario workspace views">
+        {[
+          { key: "canvas", label: "Canvas" },
+          { key: "history", label: "History" },
+          { key: "audit", label: "Audit" },
+        ].map((view) => (
+          <button
+            key={view.key}
+            type="button"
+            role="tab"
+            aria-selected={activeScenarioView === view.key}
+            className={`scenario-view-tab ${
+              activeScenarioView === view.key ? "scenario-view-tab--active" : ""
+            }`}
+            onClick={() => setActiveScenarioView(view.key as "canvas" | "history" | "audit")}
+          >
+            {view.label}
+          </button>
+        ))}
+      </div>
+
+      {activeScenarioView === "canvas" ? (
       <div ref={canvasBodyRef} className="scenario-canvas-body">
         <div
           ref={canvasRef}
@@ -5895,6 +5932,16 @@ const ScenarioCanvasPage: DashboardPage = () => {
           </section>
         ) : null}
       </div>
+      ) : (
+        <div className="scenario-canvas-body scenario-canvas-body--history">
+          <ScenarioHistoryExplorer
+            scenarioId={scenarioId}
+            nodes={graph.nodes}
+            mode={activeScenarioView === "audit" ? "audit" : "history"}
+            onJumpToNode={handleJumpToCanvasNode}
+          />
+        </div>
+      )}
     </section>
   );
 };

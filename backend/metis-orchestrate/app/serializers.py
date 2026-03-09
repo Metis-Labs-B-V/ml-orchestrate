@@ -13,6 +13,7 @@ from app.models import (
     Run,
     RunTriggerType,
     RunStep,
+    ScenarioAuditEvent,
     SampleItem,
     Scenario,
     ScenarioSchedule,
@@ -792,3 +793,78 @@ class RunDetailSerializer(RunSerializer):
 
     class Meta(RunSerializer.Meta):
         fields = RunSerializer.Meta.fields + ["steps"]
+
+
+class RunHistoryListSerializer(RunSerializer):
+    duration_ms = serializers.SerializerMethodField()
+    step_counts = serializers.SerializerMethodField()
+    first_error_message = serializers.SerializerMethodField()
+    providers_used = serializers.SerializerMethodField()
+
+    class Meta(RunSerializer.Meta):
+        fields = RunSerializer.Meta.fields + [
+            "duration_ms",
+            "step_counts",
+            "first_error_message",
+            "providers_used",
+        ]
+
+    def get_duration_ms(self, obj):
+        if obj.started_at and obj.ended_at:
+            return max(int((obj.ended_at - obj.started_at).total_seconds() * 1000), 0)
+        return 0
+
+    def get_step_counts(self, obj):
+        counts = {
+            "queued": 0,
+            "running": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        for step in obj.steps.all():
+            status = str(step.status or "").lower()
+            if status not in counts:
+                counts[status] = 0
+            counts[status] += 1
+        return counts
+
+    def get_first_error_message(self, obj):
+        for step in obj.steps.all():
+            error_json = step.error_json or {}
+            if isinstance(error_json, dict):
+                message = error_json.get("message") or error_json.get("detail")
+                if message:
+                    return str(message)
+        return ""
+
+    def get_providers_used(self, obj):
+        providers = []
+        seen = set()
+        for step in obj.steps.all():
+            node_type = str(step.node_type or "")
+            provider = node_type.split(".", 1)[0] if "." in node_type else (node_type or "other")
+            if provider and provider not in seen:
+                providers.append(provider)
+                seen.add(provider)
+        return providers
+
+
+class ScenarioAuditEventSerializer(serializers.ModelSerializer):
+    scenario_id = serializers.IntegerField(source="scenario.id", read_only=True)
+    run_id = serializers.IntegerField(source="run.id", read_only=True, allow_null=True)
+    actor_email = serializers.CharField(source="created_by", read_only=True)
+
+    class Meta:
+        model = ScenarioAuditEvent
+        fields = [
+            "id",
+            "scenario_id",
+            "run_id",
+            "event_type",
+            "event_label",
+            "payload_json",
+            "actor_email",
+            "created_at",
+            "updated_at",
+        ]

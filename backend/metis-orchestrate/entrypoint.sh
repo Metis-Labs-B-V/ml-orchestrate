@@ -3,9 +3,14 @@
 # Exit immediately if any command fails
 set -e
 
-echo "Running database migrations..."
-python manage.py migrate --noinput
+if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
+  echo "Running database migrations..."
+  python manage.py migrate --noinput
+fi
 
+if [ "$#" -eq 0 ]; then
+  set -- python manage.py runserver 0.0.0.0:8001
+fi
 
-echo "Starting supervisord for metis-orchestrate..."
-exec supervisord -c /etc/supervisor/conf.d/supervisord.conf
+echo "Starting process: $*"
+exec "$@"

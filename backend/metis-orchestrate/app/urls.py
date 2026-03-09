@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from app.views import (
     ConnectionViewSet,
+    EmailTemplateViewSet,
     IntegrationCatalogView,
     JiraOAuthExchangeView,
     JiraOAuthStartView,
@@ -19,6 +20,7 @@ router = DefaultRouter()
 router.register(r"items", SampleItemViewSet, basename="sample-item")
 router.register(r"scenarios", ScenarioViewSet, basename="scenario")
 router.register(r"connections", ConnectionViewSet, basename="connection")
+router.register(r"email-templates", EmailTemplateViewSet, basename="email-template")
 router.register(r"runs", RunViewSet, basename="run")
 
 urlpatterns = [

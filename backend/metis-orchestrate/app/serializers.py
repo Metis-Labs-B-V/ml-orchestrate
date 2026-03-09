@@ -1,11 +1,15 @@
 from collections import deque
 
 from django.conf import settings
+from django.db import transaction
 from rest_framework import serializers
 
 from app.models import (
     Connection,
     ConnectionAuthType,
+    EmailTemplate,
+    EmailTemplateCategory,
+    EmailTemplateVersion,
     Run,
     RunTriggerType,
     RunStep,
@@ -13,6 +17,16 @@ from app.models import (
     Scenario,
     ScenarioSchedule,
     ScenarioVersion,
+)
+from app.services.email_templates import (
+    EmailTemplateServiceError,
+    normalize_sample_payload,
+    normalize_variables_schema,
+)
+from app.services.connection_secrets import (
+    ConnectionSecretError,
+    get_connection_secret_payload,
+    set_connection_secret_payload,
 )
 from identity.models import Customer, Tenant
 
@@ -261,6 +275,7 @@ class ScenarioScheduleSerializer(serializers.ModelSerializer):
             "is_active",
             "next_run_at",
             "last_run_at",
+            "last_enqueued_at",
             "metadata",
             "created_at",
             "updated_at",
@@ -321,10 +336,18 @@ class ConnectionSerializer(serializers.ModelSerializer):
         provider = str(
             attrs.get("provider", getattr(self.instance, "provider", ""))
         ).strip().lower()
-        secret_payload = attrs.get(
-            "secret_payload",
-            getattr(self.instance, "secret_payload", {}),
-        ) or {}
+        if "secret_payload" in attrs:
+            secret_payload = attrs.get("secret_payload") or {}
+        elif self.instance:
+            try:
+                secret_payload = get_connection_secret_payload(
+                    self.instance,
+                    persist_migration=False,
+                ).payload
+            except ConnectionSecretError as exc:
+                raise serializers.ValidationError({"secret_payload": [exc.message]})
+        else:
+            secret_payload = {}
         if provider == "jira":
             if auth_type == ConnectionAuthType.API_TOKEN:
                 required_fields = ["serviceUrl", "username", "apiToken"]
@@ -377,7 +400,309 @@ class ConnectionSerializer(serializers.ModelSerializer):
             if not secret_payload.get("serviceUrl"):
                 secret_payload["serviceUrl"] = "https://api.hubapi.com"
             attrs["secret_payload"] = secret_payload
+        elif provider == "email":
+            username = str(
+                secret_payload.get("username")
+                or secret_payload.get("email")
+                or ""
+            ).strip()
+            smtp_host = str(secret_payload.get("smtpHost") or secret_payload.get("host") or "").strip()
+            imap_host = str(secret_payload.get("imapHost") or secret_payload.get("inboxHost") or "").strip()
+            smtp_password = str(
+                secret_payload.get("smtpPassword")
+                or secret_payload.get("password")
+                or ""
+            )
+            imap_password = str(
+                secret_payload.get("imapPassword")
+                or smtp_password
+                or ""
+            )
+            smtp_access_token = str(
+                secret_payload.get("smtpAccessToken")
+                or secret_payload.get("accessToken")
+                or ""
+            )
+            imap_access_token = str(
+                secret_payload.get("imapAccessToken")
+                or smtp_access_token
+                or ""
+            )
 
+            if not username:
+                raise serializers.ValidationError(
+                    {"secret_payload": ["Missing required Email field: username."]}
+                )
+
+            if not smtp_host and not imap_host:
+                raise serializers.ValidationError(
+                    {
+                        "secret_payload": [
+                            "Email connection requires at least one host: smtpHost or imapHost."
+                        ]
+                    }
+                )
+
+            if auth_type == ConnectionAuthType.OAUTH:
+                missing = []
+                if smtp_host and not smtp_access_token:
+                    missing.append("smtpAccessToken")
+                if imap_host and not imap_access_token:
+                    missing.append("imapAccessToken")
+                if missing:
+                    raise serializers.ValidationError(
+                        {
+                            "secret_payload": [
+                                f"Missing required Email OAuth fields: {', '.join(missing)}"
+                            ]
+                        }
+                    )
+            else:
+                missing = []
+                if smtp_host and not smtp_password:
+                    missing.append("smtpPassword")
+                if imap_host and not imap_password:
+                    missing.append("imapPassword")
+                if missing:
+                    raise serializers.ValidationError(
+                        {
+                            "secret_payload": [
+                                f"Missing required Email password fields: {', '.join(missing)}"
+                            ]
+                        }
+                    )
+
+        return attrs
+
+    def create(self, validated_data):
+        with transaction.atomic():
+            secret_payload = validated_data.pop("secret_payload", None)
+            connection = super().create(validated_data)
+            if secret_payload is not None:
+                try:
+                    set_connection_secret_payload(connection, secret_payload)
+                except ConnectionSecretError as exc:
+                    raise serializers.ValidationError({"secret_payload": [exc.message]})
+                connection.save(
+                    update_fields=[
+                        "encrypted_secret_payload",
+                        "secret_payload",
+                        "secret_payload_migrated_at",
+                        "updated_at",
+                    ]
+                )
+            return connection
+
+    def update(self, instance, validated_data):
+        with transaction.atomic():
+            secret_payload = validated_data.pop("secret_payload", None)
+            connection = super().update(instance, validated_data)
+            if secret_payload is not None:
+                try:
+                    set_connection_secret_payload(connection, secret_payload)
+                except ConnectionSecretError as exc:
+                    raise serializers.ValidationError({"secret_payload": [exc.message]})
+                connection.save(
+                    update_fields=[
+                        "encrypted_secret_payload",
+                        "secret_payload",
+                        "secret_payload_migrated_at",
+                        "updated_at",
+                    ]
+                )
+            return connection
+
+
+class EmailTemplateSerializer(serializers.ModelSerializer):
+    tenant_id = serializers.PrimaryKeyRelatedField(
+        source="tenant", queryset=Tenant.objects.all(), required=False, allow_null=True
+    )
+    workspace_id = serializers.PrimaryKeyRelatedField(
+        source="workspace", queryset=Customer.objects.all(), required=False, allow_null=True
+    )
+    tenant_name = serializers.CharField(source="tenant.name", read_only=True)
+    workspace_name = serializers.CharField(source="workspace.name", read_only=True)
+    version = serializers.IntegerField(source="current_version", read_only=True)
+
+    class Meta:
+        model = EmailTemplate
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "category",
+            "description",
+            "subject_template",
+            "html_template",
+            "text_template",
+            "variables_schema",
+            "sample_payload",
+            "is_system_template",
+            "is_active",
+            "version",
+            "current_version",
+            "tenant_id",
+            "tenant_name",
+            "workspace_id",
+            "workspace_name",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "is_system_template",
+            "version",
+            "current_version",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_variables_schema(self, value):
+        try:
+            return normalize_variables_schema(value)
+        except EmailTemplateServiceError as exc:
+            raise serializers.ValidationError(exc.errors.get("variables_schema") or [exc.message])
+
+    def validate_sample_payload(self, value):
+        try:
+            return normalize_sample_payload(value)
+        except EmailTemplateServiceError as exc:
+            raise serializers.ValidationError(exc.errors.get("sample_payload") or [exc.message])
+
+    def validate(self, attrs):
+        tenant = attrs.get("tenant", getattr(self.instance, "tenant", None))
+        workspace = attrs.get("workspace", getattr(self.instance, "workspace", None))
+
+        if workspace and not tenant and workspace.tenant_id:
+            attrs["tenant"] = workspace.tenant
+            tenant = attrs["tenant"]
+
+        if workspace and tenant and workspace.tenant_id and workspace.tenant_id != tenant.id:
+            raise serializers.ValidationError(
+                {"workspace_id": ["Selected workspace does not belong to tenant_id."]}
+            )
+
+        subject_template = attrs.get(
+            "subject_template",
+            getattr(self.instance, "subject_template", ""),
+        )
+        html_template = attrs.get(
+            "html_template",
+            getattr(self.instance, "html_template", ""),
+        )
+        text_template = attrs.get(
+            "text_template",
+            getattr(self.instance, "text_template", ""),
+        )
+        if not html_template and not text_template:
+            raise serializers.ValidationError(
+                {
+                    "html_template": ["Provide html_template or text_template."],
+                    "text_template": ["Provide text_template or html_template."],
+                }
+            )
+        if not attrs.get("name", getattr(self.instance, "name", "")):
+            raise serializers.ValidationError({"name": ["name is required."]})
+        category = attrs.get("category", getattr(self.instance, "category", ""))
+        valid_categories = {choice[0] for choice in EmailTemplateCategory.choices}
+        if category not in valid_categories:
+            raise serializers.ValidationError(
+                {"category": [f"category must be one of: {', '.join(sorted(valid_categories))}."]}
+            )
+        return attrs
+
+
+class EmailTemplateVersionSerializer(serializers.ModelSerializer):
+    template_id = serializers.IntegerField(source="template.id", read_only=True)
+
+    class Meta:
+        model = EmailTemplateVersion
+        fields = [
+            "id",
+            "template_id",
+            "version",
+            "name",
+            "slug",
+            "category",
+            "description",
+            "subject_template",
+            "html_template",
+            "text_template",
+            "variables_schema",
+            "sample_payload",
+            "change_note",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class EmailTemplatePreviewSerializer(serializers.Serializer):
+    template_id = serializers.IntegerField(required=False)
+    name = serializers.CharField(required=False, allow_blank=True)
+    slug = serializers.CharField(required=False, allow_blank=True)
+    category = serializers.CharField(required=False, allow_blank=True)
+    description = serializers.CharField(required=False, allow_blank=True)
+    subject_template = serializers.CharField(required=False, allow_blank=True)
+    html_template = serializers.CharField(required=False, allow_blank=True)
+    text_template = serializers.CharField(required=False, allow_blank=True)
+    variables_schema = serializers.JSONField(required=False)
+    sample_payload = serializers.JSONField(required=False)
+    payload = serializers.JSONField(required=False)
+    bindings = serializers.JSONField(required=False)
+    subject_override = serializers.CharField(required=False, allow_blank=True)
+    html_override = serializers.CharField(required=False, allow_blank=True)
+    text_override = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_variables_schema(self, value):
+        try:
+            return normalize_variables_schema(value)
+        except EmailTemplateServiceError as exc:
+            raise serializers.ValidationError(exc.errors.get("variables_schema") or [exc.message])
+
+    def validate_sample_payload(self, value):
+        try:
+            return normalize_sample_payload(value)
+        except EmailTemplateServiceError as exc:
+            raise serializers.ValidationError(exc.errors.get("sample_payload") or [exc.message])
+
+    def validate_payload(self, value):
+        return normalize_sample_payload(value)
+
+    def validate_bindings(self, value):
+        return normalize_sample_payload(value)
+
+    def validate(self, attrs):
+        if not attrs.get("template_id") and not (
+            attrs.get("subject_template")
+            or attrs.get("html_template")
+            or attrs.get("text_template")
+        ):
+            raise serializers.ValidationError(
+                {
+                    "template_id": [
+                        "Provide template_id or inline template fields for preview."
+                    ]
+                }
+            )
+        return attrs
+
+
+class EmailTemplateTestSendSerializer(EmailTemplatePreviewSerializer):
+    connection_id = serializers.IntegerField()
+    to = serializers.JSONField(required=False)
+    cc = serializers.JSONField(required=False)
+    bcc = serializers.JSONField(required=False)
+    reply_to = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("to") in (None, "", []):
+            raise serializers.ValidationError({"to": ["At least one recipient is required."]})
         return attrs
 
 
@@ -417,6 +742,9 @@ class RunSerializer(serializers.ModelSerializer):
             "status",
             "tenant_id",
             "workspace_id",
+            "queued_at",
+            "dispatched_at",
+            "attempt_count",
             "started_at",
             "ended_at",
             "metadata",
@@ -428,6 +756,9 @@ class RunSerializer(serializers.ModelSerializer):
             "status",
             "tenant_id",
             "workspace_id",
+            "queued_at",
+            "dispatched_at",
+            "attempt_count",
             "started_at",
             "ended_at",
             "created_at",

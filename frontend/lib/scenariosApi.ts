@@ -6,12 +6,41 @@ import type {
   ScenarioGraph,
   ScenarioRecord,
 } from "../types/scenarios";
+import type {
+  EmailTemplatePreviewPayload,
+  EmailTemplatePreviewResult,
+  EmailTemplateRecord,
+  EmailTemplateTestSendPayload,
+  EmailTemplateUpsertPayload,
+  EmailTemplateVersionRecord,
+} from "../types/emailTemplates";
 
 type ApiEnvelope<T> = {
   status?: string;
   message?: string;
   data?: T;
   errors?: Record<string, unknown> | null;
+};
+
+export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+
+export type RunSummary = {
+  id: number;
+  scenario_id: number;
+  scenario_version: number;
+  trigger_type: "manual" | "schedule" | "webhook";
+  status: RunStatus;
+  tenant_id: number | null;
+  workspace_id: number | null;
+  queued_at?: string | null;
+  dispatched_at?: string | null;
+  attempt_count?: number;
+  started_at: string | null;
+  ended_at: string | null;
+  metadata?: Record<string, unknown>;
+  steps?: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
 };
 
 function buildQuery(params: Record<string, string | number | undefined | null>) {
@@ -134,14 +163,23 @@ export async function activateScenario(
 
 export async function runScenario(
   scenarioId: string | number
-): Promise<Record<string, unknown>> {
+): Promise<RunSummary> {
   const response = await apiFetch(API_PATHS.runs.create, {
     method: "POST",
     body: JSON.stringify({ scenario_id: scenarioId }),
   });
-  const envelope = await parseEnvelope<Record<string, unknown>>(response);
+  const envelope = await parseEnvelope<RunSummary>(response);
   if (!envelope.data) {
     throw new Error("Unable to run scenario.");
+  }
+  return envelope.data;
+}
+
+export async function getRun(runId: string | number): Promise<RunSummary> {
+  const response = await apiFetch(API_PATHS.runs.detail(runId));
+  const envelope = await parseEnvelope<RunSummary>(response);
+  if (!envelope.data) {
+    throw new Error("Run not found.");
   }
   return envelope.data;
 }
@@ -173,7 +211,8 @@ export async function listConnections(scope: {
 
 export async function createApiTokenConnection(payload: {
   display_name: string;
-  provider: "jira" | "hubspot";
+  provider: "jira" | "hubspot" | "email";
+  auth_type?: "apiToken" | "oauth";
   tenant_id?: string | number | null;
   workspace_id?: string | number | null;
   secret_payload: Record<string, unknown>;
@@ -182,7 +221,7 @@ export async function createApiTokenConnection(payload: {
     method: "POST",
     body: JSON.stringify({
       ...payload,
-      auth_type: "apiToken",
+      auth_type: payload.auth_type || "apiToken",
     }),
   });
   const envelope = await parseEnvelope<ConnectionRecord>(response);
@@ -259,6 +298,160 @@ export async function exchangeJiraOauth(payload: {
   const envelope = await parseEnvelope<ConnectionRecord>(response);
   if (!envelope.data) {
     throw new Error("Unable to complete Jira OAuth.");
+  }
+  return envelope.data;
+}
+
+export async function listEmailTemplates(scope: {
+  tenantId?: string | number | null;
+  workspaceId?: string | number | null;
+  category?: string | null;
+  search?: string | null;
+}): Promise<{ items: EmailTemplateRecord[]; count: number }> {
+  const query = buildQuery({
+    tenant_id: scope.tenantId,
+    workspace_id: scope.workspaceId,
+    category: scope.category,
+    search: scope.search,
+  });
+  const response = await apiFetch(API_PATHS.emailTemplates.list(query));
+  const payload = await parseEnvelope<{
+    items?: EmailTemplateRecord[];
+    results?: EmailTemplateRecord[];
+    count?: number;
+  }>(response);
+  if (Array.isArray(payload.data?.results)) {
+    return {
+      items: payload.data.results || [],
+      count: Number(payload.data?.count || 0),
+    };
+  }
+  return {
+    items: payload.data?.items || [],
+    count: Number(payload.data?.count || 0),
+  };
+}
+
+export async function getEmailTemplate(
+  templateId: string | number
+): Promise<EmailTemplateRecord> {
+  const response = await apiFetch(API_PATHS.emailTemplates.detail(templateId));
+  const payload = await parseEnvelope<EmailTemplateRecord>(response);
+  if (!payload.data) {
+    throw new Error("Email template not found.");
+  }
+  return payload.data;
+}
+
+export async function createEmailTemplate(
+  payload: EmailTemplateUpsertPayload
+): Promise<EmailTemplateRecord> {
+  const response = await apiFetch(API_PATHS.emailTemplates.list(), {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  const envelope = await parseEnvelope<EmailTemplateRecord>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to create email template.");
+  }
+  return envelope.data;
+}
+
+export async function updateEmailTemplate(
+  templateId: string | number,
+  payload: Partial<EmailTemplateUpsertPayload>
+): Promise<EmailTemplateRecord> {
+  const response = await apiFetch(API_PATHS.emailTemplates.detail(templateId), {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  const envelope = await parseEnvelope<EmailTemplateRecord>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to update email template.");
+  }
+  return envelope.data;
+}
+
+export async function deleteEmailTemplate(templateId: string | number): Promise<void> {
+  const response = await apiFetch(API_PATHS.emailTemplates.detail(templateId), {
+    method: "DELETE",
+  });
+  await parseEnvelope<Record<string, unknown>>(response);
+}
+
+export async function duplicateEmailTemplate(payload: {
+  templateId: string | number;
+  tenant_id?: string | number | null;
+  workspace_id?: string | number | null;
+}): Promise<EmailTemplateRecord> {
+  const response = await apiFetch(API_PATHS.emailTemplates.duplicate(payload.templateId), {
+    method: "POST",
+    body: JSON.stringify({
+      tenant_id: payload.tenant_id,
+      workspace_id: payload.workspace_id,
+    }),
+  });
+  const envelope = await parseEnvelope<EmailTemplateRecord>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to duplicate email template.");
+  }
+  return envelope.data;
+}
+
+export async function listEmailTemplateVersions(
+  templateId: string | number
+): Promise<{ items: EmailTemplateVersionRecord[]; count: number }> {
+  const response = await apiFetch(API_PATHS.emailTemplates.versions(templateId));
+  const payload = await parseEnvelope<{
+    items?: EmailTemplateVersionRecord[];
+    count?: number;
+  }>(response);
+  return {
+    items: payload.data?.items || [],
+    count: Number(payload.data?.count || 0),
+  };
+}
+
+export async function previewEmailTemplate(
+  payload: EmailTemplatePreviewPayload
+): Promise<EmailTemplatePreviewResult> {
+  const response = await apiFetch(API_PATHS.emailTemplates.previewInline, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  const envelope = await parseEnvelope<EmailTemplatePreviewResult>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to preview email template.");
+  }
+  return envelope.data;
+}
+
+export async function previewStoredEmailTemplate(payload: {
+  templateId: string | number;
+  data: EmailTemplatePreviewPayload;
+}): Promise<EmailTemplatePreviewResult> {
+  const response = await apiFetch(API_PATHS.emailTemplates.preview(payload.templateId), {
+    method: "POST",
+    body: JSON.stringify(payload.data),
+  });
+  const envelope = await parseEnvelope<EmailTemplatePreviewResult>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to preview email template.");
+  }
+  return envelope.data;
+}
+
+export async function testSendEmailTemplate(payload: {
+  templateId: string | number;
+  data: EmailTemplateTestSendPayload;
+}): Promise<Record<string, unknown>> {
+  const response = await apiFetch(API_PATHS.emailTemplates.testSend(payload.templateId), {
+    method: "POST",
+    body: JSON.stringify(payload.data),
+  });
+  const envelope = await parseEnvelope<Record<string, unknown>>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to send test email.");
   }
   return envelope.data;
 }

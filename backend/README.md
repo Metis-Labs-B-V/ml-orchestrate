@@ -60,6 +60,14 @@ python manage.py migrate
 python manage.py runserver 127.0.0.1:8001
 ```
 
+Optional async worker processes (for queued scenario runs and schedule polling):
+
+```bash
+cd metis-orchestrate
+celery -A core worker -l info --concurrency=2
+celery -A core beat -l info
+```
+
 ## Bootstrap MVP User + Required Identity Data
 
 Run this once after migrations to create/update a working login user and required
@@ -93,6 +101,18 @@ For scenario graph validation:
 ```bash
 ORCHESTRATE_ALLOW_CYCLES=false
 ORCHESTRATE_HTTP_TIMEOUT_SECONDS=30
+ORCHESTRATE_EMAIL_TIMEOUT_SECONDS=30
+ORCHESTRATE_SECRET_ENCRYPTION_ENABLED=true
+ORCHESTRATE_SECRET_ENCRYPTION_KEY=<32-byte-fernet-key-or-passphrase>
+ORCHESTRATE_SCHEDULE_SCAN_INTERVAL_SECONDS=60
+ORCHESTRATE_STALE_QUEUED_RUN_SECONDS=1800
+ORCHESTRATE_STALE_RUNNING_RUN_SECONDS=900
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/1
+CELERY_TASK_ALWAYS_EAGER=false
+CELERY_WORKER_CONCURRENCY=2
+CELERY_TASK_TIME_LIMIT=300
+CELERY_TASK_SOFT_TIME_LIMIT=270
 JIRA_OAUTH_AUTHORIZE_URL=https://auth.atlassian.com/authorize
 JIRA_OAUTH_TOKEN_URL=https://auth.atlassian.com/oauth/token
 JIRA_OAUTH_ACCESSIBLE_RESOURCES_URL=https://api.atlassian.com/oauth/token/accessible-resources
@@ -106,6 +126,13 @@ JENKINS_OAUTH_CLIENT_ID=<client-id>
 JENKINS_OAUTH_CLIENT_SECRET=<client-secret>
 JENKINS_OAUTH_REDIRECT_URI=http://localhost:3000/dashboard/integrations/jenkins/oauth-callback
 JENKINS_OAUTH_SCOPES=read,write
+```
+
+One-time optional backfill command to migrate existing plaintext connection secrets:
+
+```bash
+cd metis-orchestrate
+python manage.py backfill_connection_secrets
 ```
 
 ## Azure App Service Logs (If Using Azure)

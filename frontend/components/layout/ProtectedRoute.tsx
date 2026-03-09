@@ -15,13 +15,13 @@ export default function ProtectedRoute({ children }: Props) {
   const dispatch = useAppDispatch();
   const ready = useAppSelector((state) => state.session.ready);
   const user = useAppSelector((state) => state.session.user);
+  const hasSession = Boolean(user && authStorage.getAccess());
 
   useEffect(() => {
     if (!ready) {
       return;
     }
-    const access = authStorage.getAccess();
-    if (!access || !user) {
+    if (!hasSession) {
       authStorage.clear();
       dispatch(clearSession());
       if (typeof window !== "undefined") {
@@ -30,7 +30,7 @@ export default function ProtectedRoute({ children }: Props) {
       }
       router.replace("/");
     }
-  }, [dispatch, ready, router, user]);
+  }, [dispatch, hasSession, ready, router]);
 
   if (!ready) {
     return (
@@ -42,6 +42,10 @@ export default function ProtectedRoute({ children }: Props) {
         </div>
       </div>
     );
+  }
+
+  if (!hasSession) {
+    return null;
   }
 
   return <>{children}</>;

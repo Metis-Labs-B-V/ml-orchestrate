@@ -11,7 +11,7 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update \
-	&& apt-get install -y curl make supervisor \
+	&& apt-get install -y curl make \
 	&& rm -rf /var/lib/apt/lists/* 
 
 # Copy requirements file
@@ -25,9 +25,6 @@ COPY . .
 
 # Make entrypoint script executable
 RUN chmod +x /app/entrypoint.sh  
-
-# Copy supervisord configuration file
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Use entrypoint script to manage startup logic
 ENTRYPOINT ["/bin/bash", "entrypoint.sh"]

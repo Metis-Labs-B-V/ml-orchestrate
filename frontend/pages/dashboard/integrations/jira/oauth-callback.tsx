@@ -37,8 +37,10 @@ const JiraOauthCallbackPage: DashboardPage = () => {
 
     if (!code || !state) {
       const msg = accessToken
-        ? "OAuth callback returned access_token without authorization code. Please configure Atlassian app for Authorization Code flow."
-        : "Missing OAuth code/state in callback URL.";
+        ? "OAuth callback returned access_token without authorization code. Please configure the Atlassian app to use OAuth 2.0 (3LO) Authorization Code flow."
+        : state
+          ? "Atlassian redirected back without an authorization code. Check the app's Authorization settings in the Atlassian developer console and make sure the callback URL exactly matches the configured redirect URI."
+          : "Missing OAuth code/state in callback URL.";
       setError(msg);
       setMessage("OAuth failed.");
       if (window.opener && !window.opener.closed) {

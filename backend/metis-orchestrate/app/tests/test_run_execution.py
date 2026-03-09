@@ -3,9 +3,10 @@ import base64
 import json
 
 from django.test import TestCase
+from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
-from app.models import Connection, RunStatus, RunStepStatus, Scenario
+from app.models import Connection, EmailTemplate, RunStatus, RunStepStatus, Scenario
 from identity.models import Customer, Tenant, User, UserCustomer, UserTenant
 
 
@@ -44,6 +45,11 @@ class _MockResponse:
         return self._payload
 
 
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_BROKER_URL="memory://",
+    CELERY_RESULT_BACKEND="cache+memory://",
+)
 class RunExecutionTests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -82,6 +88,23 @@ class RunExecutionTests(TestCase):
             graph_json=graph_json,
         )
 
+    def _start_and_fetch_run(self, scenario_id):
+        response = self.client.post(
+            "/api/v1/metis-orchestrate/runs/",
+            {"scenario_id": scenario_id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        queued_payload = response.json().get("data", {})
+        self.assertEqual(queued_payload.get("status"), RunStatus.QUEUED)
+        run_id = queued_payload.get("id")
+        self.assertIsNotNone(run_id)
+
+        detail_response = self.client.get(f"/api/v1/metis-orchestrate/runs/{run_id}/")
+        self.assertEqual(detail_response.status_code, 200)
+        detail_payload = detail_response.json().get("data", {})
+        return queued_payload, detail_payload
+
     @patch("app.integrations.jira.requests.Session.request")
     def test_run_executes_jira_api_call_node(self, request_mock):
         request_mock.return_value = _MockResponse(payload={"accountId": "abc123"})
@@ -103,13 +126,7 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
         steps = payload.get("steps", [])
         self.assertEqual(len(steps), 1)
@@ -130,13 +147,7 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.FAILED)
         steps = payload.get("steps", [])
         self.assertEqual(len(steps), 1)
@@ -176,13 +187,7 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
         steps = payload.get("steps", [])
         self.assertEqual(len(steps), 1)
@@ -225,18 +230,12 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
 
         self.assertGreaterEqual(len(calls), 2)
-        second_call_body = calls[1].get("json", {})
-        self.assertEqual(second_call_body.get("jql"), 'reporter="user@example.com"')
+        second_call_params = calls[1].get("params", {})
+        self.assertEqual(second_call_params.get("jql"), 'reporter="user@example.com"')
 
     @patch("app.integrations.jira.requests.Session.request")
     def test_run_executes_jira_status_update_node(self, request_mock):
@@ -258,13 +257,7 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
         self.assertEqual(request_mock.call_count, 1)
         kwargs = request_mock.call_args.kwargs
@@ -295,13 +288,7 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
         kwargs = request_mock.call_args.kwargs
         self.assertEqual(kwargs.get("method"), "POST")
@@ -348,13 +335,7 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
 
         steps = payload.get("steps", [])
@@ -390,14 +371,88 @@ class RunExecutionTests(TestCase):
             }
         )
 
-        response = self.client.post(
-            "/api/v1/metis-orchestrate/runs/",
-            {"scenario_id": scenario.id},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        payload = response.json().get("data", {})
+        _, payload = self._start_and_fetch_run(scenario.id)
         self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
         steps = payload.get("steps", [])
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0].get("output_raw_json", {}).get("statusCode"), 500)
+
+    @patch("app.integrations.email.EmailAdapter.send_email")
+    def test_run_executes_email_template_mode(self, send_email_mock):
+        send_email_mock.return_value = {"ok": True, "messageId": "email-1"}
+        email_connection = Connection.objects.create(
+            provider="email",
+            display_name="Email Test",
+            auth_type="apiToken",
+            tenant=self.tenant,
+            workspace=self.workspace,
+            created_by=self.user.email,
+            updated_by=self.user.email,
+            secret_payload={
+                "username": "sender@example.com",
+                "smtpHost": "smtp.example.com",
+                "smtpPort": 587,
+                "smtpPassword": "password",
+                "smtpUseStarttls": True,
+            },
+        )
+        template = EmailTemplate.objects.create(
+            name="Run Template",
+            slug="run-template",
+            category="support",
+            tenant=self.tenant,
+            workspace=self.workspace,
+            subject_template="Ticket {{ticket_id}} for {{customer_name}}",
+            html_template="<p>{{customer_name}}</p><p>{{ticket_id}}</p>",
+            text_template="Customer {{customer_name}} ticket {{ticket_id}}",
+            variables_schema=[
+                {"key": "customer_name", "required": True},
+                {"key": "ticket_id", "required": True},
+            ],
+            created_by=self.user.email,
+            updated_by=self.user.email,
+        )
+
+        scenario = self._create_scenario(
+            {
+                "nodes": [
+                    {
+                        "id": "json_seed",
+                        "type": "json.create",
+                        "config": {
+                            "payload": {
+                                "customer": {"name": "Ava"},
+                                "ticket": {"id": "SUP-100"},
+                            }
+                        },
+                    },
+                    {
+                        "id": "email_node",
+                        "type": "email.send",
+                        "config": {
+                            "connectionId": email_connection.id,
+                            "composeMode": "template",
+                            "templateId": template.id,
+                            "to": ["notify@example.com"],
+                            "templateBindings": {
+                                "customer_name": "{{json_seed.customer.name}}",
+                                "ticket_id": "{{json_seed.ticket.id}}",
+                            },
+                        },
+                    },
+                ],
+                "edges": [{"id": "edge-1", "source": "json_seed", "target": "email_node"}],
+            }
+        )
+
+        _, payload = self._start_and_fetch_run(scenario.id)
+        self.assertEqual(payload.get("status"), RunStatus.SUCCEEDED)
+        steps = payload.get("steps", [])
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(steps[1].get("status"), RunStepStatus.SUCCEEDED)
+
+        send_email_mock.assert_called_once()
+        send_payload = send_email_mock.call_args.args[0]
+        self.assertEqual(send_payload["to"], ["notify@example.com"])
+        self.assertEqual(send_payload["subject"], "Ticket SUP-100 for Ava")
+        self.assertIn("Customer Ava ticket SUP-100", send_payload["bodyText"])

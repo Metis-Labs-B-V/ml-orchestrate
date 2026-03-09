@@ -86,6 +86,7 @@ class ScenarioSchedule(BaseModel):
     is_active = models.BooleanField(default=True)
     next_run_at = models.DateTimeField(null=True, blank=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
+    last_enqueued_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)
 
     class Meta:
@@ -128,6 +129,8 @@ class Connection(BaseModel):
     metadata = models.JSONField(blank=True, default=dict)
     secret_ref = models.CharField(max_length=255, blank=True, default="")
     secret_payload = models.JSONField(blank=True, default=dict)
+    encrypted_secret_payload = models.TextField(blank=True, default="")
+    secret_payload_migrated_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
         max_length=20, choices=ConnectionStatus.choices, default=ConnectionStatus.ACTIVE
     )
@@ -135,6 +138,80 @@ class Connection(BaseModel):
 
     class Meta:
         ordering = ["-updated_at"]
+
+
+class EmailTemplateCategory(models.TextChoices):
+    TRANSACTIONAL = "transactional", "Transactional"
+    SUPPORT = "support", "Support"
+    SALES = "sales", "Sales"
+    REMINDER = "reminder", "Reminder"
+    INTERNAL_NOTIFICATION = "internal_notification", "Internal Notification"
+
+
+class EmailTemplate(BaseModel):
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, db_index=True)
+    category = models.CharField(
+        max_length=50,
+        choices=EmailTemplateCategory.choices,
+        default=EmailTemplateCategory.TRANSACTIONAL,
+    )
+    description = models.TextField(blank=True, default="")
+    tenant = models.ForeignKey(
+        "identity.Tenant",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orchestrate_email_templates",
+    )
+    workspace = models.ForeignKey(
+        "identity.Customer",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orchestrate_email_templates",
+    )
+    subject_template = models.TextField(blank=True, default="")
+    html_template = models.TextField(blank=True, default="")
+    text_template = models.TextField(blank=True, default="")
+    variables_schema = models.JSONField(blank=True, default=list)
+    sample_payload = models.JSONField(blank=True, default=dict)
+    is_system_template = models.BooleanField(default=False)
+    current_version = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ["name", "-updated_at"]
+
+    def __str__(self):
+        return self.name
+
+
+class EmailTemplateVersion(BaseModel):
+    template = models.ForeignKey(
+        EmailTemplate,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    version = models.PositiveIntegerField()
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255)
+    category = models.CharField(max_length=50, choices=EmailTemplateCategory.choices)
+    description = models.TextField(blank=True, default="")
+    subject_template = models.TextField(blank=True, default="")
+    html_template = models.TextField(blank=True, default="")
+    text_template = models.TextField(blank=True, default="")
+    variables_schema = models.JSONField(blank=True, default=list)
+    sample_payload = models.JSONField(blank=True, default=dict)
+    change_note = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["template", "version"],
+                name="unique_email_template_version",
+            ),
+        ]
 
 
 class RunStatus(models.TextChoices):
@@ -174,6 +251,9 @@ class Run(BaseModel):
         on_delete=models.SET_NULL,
         related_name="orchestrate_runs",
     )
+    queued_at = models.DateTimeField(null=True, blank=True)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(blank=True, default=dict)

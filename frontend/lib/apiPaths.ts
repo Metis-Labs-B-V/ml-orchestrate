@@ -84,6 +84,20 @@ export const API_PATHS = {
     jenkinsOauthStart: `${ORCHESTRATE_PREFIX}/integrations/jenkins/oauth/start/`,
     jenkinsOauthExchange: `${ORCHESTRATE_PREFIX}/integrations/jenkins/oauth/exchange/`,
   },
+  emailTemplates: {
+    list: (query?: string) => withQuery(`${ORCHESTRATE_PREFIX}/email-templates/`, query),
+    detail: (templateId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/email-templates/${templateId}/`,
+    duplicate: (templateId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/email-templates/${templateId}/duplicate/`,
+    versions: (templateId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/email-templates/${templateId}/versions/`,
+    preview: (templateId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/email-templates/${templateId}/preview/`,
+    testSend: (templateId: string | number) =>
+      `${ORCHESTRATE_PREFIX}/email-templates/${templateId}/test-send/`,
+    previewInline: `${ORCHESTRATE_PREFIX}/email-templates/preview/`,
+  },
   scenarios: {
     list: (query?: string) => withQuery(`${ORCHESTRATE_PREFIX}/scenarios/`, query),
     detail: (scenarioId: string | number) =>

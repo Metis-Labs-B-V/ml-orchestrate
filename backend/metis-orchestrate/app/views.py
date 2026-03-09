@@ -6,6 +6,7 @@ from urllib.parse import urlencode, urlparse
 import requests
 from django.conf import settings
 from django.core import signing
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -15,22 +16,29 @@ from rest_framework.views import APIView
 from common_utils.api.responses import error_response, success_response
 
 from app.catalog import get_integration_catalog
+from app.integrations.email import EmailAdapter, EmailExecutionError
 from app.integrations.hubspot import HubspotAdapter, HubspotExecutionError
 from app.integrations.jira import JiraAdapter, JiraExecutionError
 from app.models import (
     Connection,
     ConnectionAuthType,
     ConnectionStatus,
+    EmailTemplate,
     Run,
     RunStatus,
     SampleItem,
     Scenario,
     ScenarioSchedule,
+    ScheduleTriggerType,
     ScenarioStatus,
     ScenarioVersion,
 )
 from app.serializers import (
     ConnectionSerializer,
+    EmailTemplatePreviewSerializer,
+    EmailTemplateSerializer,
+    EmailTemplateTestSendSerializer,
+    EmailTemplateVersionSerializer,
     RunDetailSerializer,
     RunSerializer,
     SampleItemSerializer,
@@ -38,7 +46,22 @@ from app.serializers import (
     ScenarioSerializer,
     ScenarioVersionSerializer,
 )
-from app.services.execution import execute_run
+from app.services.connection_secrets import (
+    ConnectionSecretError,
+    get_connection_secret_payload,
+)
+from app.services.email_templates import (
+    EmailTemplateServiceError,
+    build_definition,
+    create_template,
+    duplicate_template,
+    render_definition,
+    render_template_instance,
+    template_to_definition,
+    test_send_template,
+    update_template,
+)
+from app.services.run_dispatcher import enqueue_manual_run
 
 
 @api_view(["GET"])
@@ -770,6 +793,13 @@ class ScenarioScheduleListCreateView(APIView):
                 request=request,
             )
         schedule = serializer.save(scenario=scenario)
+        if (
+            schedule.trigger_type == ScheduleTriggerType.POLLING
+            and schedule.is_active
+            and schedule.next_run_at is None
+        ):
+            schedule.next_run_at = timezone.now()
+            schedule.save(update_fields=["next_run_at", "updated_at"])
         return success_response(
             data=ScenarioScheduleSerializer(schedule).data,
             message="Scenario schedule created",
@@ -815,6 +845,13 @@ class ScenarioScheduleDetailView(APIView):
                 request=request,
             )
         schedule = serializer.save()
+        if (
+            schedule.trigger_type == ScheduleTriggerType.POLLING
+            and schedule.is_active
+            and schedule.next_run_at is None
+        ):
+            schedule.next_run_at = timezone.now()
+            schedule.save(update_fields=["next_run_at", "updated_at"])
         return success_response(
             data=ScenarioScheduleSerializer(schedule).data,
             message="Scenario schedule updated",
@@ -869,7 +906,17 @@ class ConnectionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="test")
     def test_connection(self, request, pk=None):
         connection = self.get_object()
-        secret_payload = connection.secret_payload or {}
+        try:
+            secret_payload = get_connection_secret_payload(connection).payload
+        except ConnectionSecretError as exc:
+            connection.status = ConnectionStatus.ERROR
+            connection.save(update_fields=["status", "updated_at"])
+            return error_response(
+                errors={"secret_payload": [exc.message]},
+                message="Connection test failed",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
         provider = str(connection.provider or "").lower()
         if provider == "jira":
             try:
@@ -908,6 +955,22 @@ class ConnectionViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                     request=request,
                 )
+        elif provider == "email":
+            try:
+                adapter = EmailAdapter(
+                    secret_payload,
+                    auth_type=connection.auth_type,
+                )
+                adapter.test_connection()
+            except EmailExecutionError as exc:
+                connection.status = ConnectionStatus.ERROR
+                connection.save(update_fields=["status", "updated_at"])
+                return error_response(
+                    errors={"secret_payload": [exc.message], "details": exc.details},
+                    message="Connection test failed",
+                    status=status.HTTP_400_BAD_REQUEST,
+                    request=request,
+                )
         elif (
             connection.auth_type == ConnectionAuthType.OAUTH
             and provider == "jenkins"
@@ -936,6 +999,326 @@ class ConnectionViewSet(viewsets.ModelViewSet):
             message="Connection test passed",
             request=request,
         )
+
+
+def _scope_email_template_queryset(queryset, request):
+    user = request.user
+    system_filter = Q(
+        is_system_template=True,
+        tenant__isnull=True,
+        workspace__isnull=True,
+    )
+    if user.is_superuser:
+        scoped = queryset
+    else:
+        user_email = (getattr(user, "email", "") or "").strip()
+        if not user_email:
+            return queryset.none()
+        scoped = queryset.filter(system_filter | Q(created_by__iexact=user_email))
+
+    tenant_id = request.query_params.get("tenant_id")
+    workspace_id = request.query_params.get("workspace_id")
+    category = str(request.query_params.get("category") or "").strip()
+    search = str(request.query_params.get("search") or "").strip()
+    if tenant_id:
+        scoped = scoped.filter(Q(tenant_id=tenant_id) | system_filter)
+    if workspace_id:
+        scoped = scoped.filter(Q(workspace_id=workspace_id) | system_filter)
+    if category:
+        scoped = scoped.filter(category=category)
+    if search:
+        scoped = scoped.filter(Q(name__icontains=search) | Q(description__icontains=search))
+    return scoped
+
+
+def _get_scoped_connection_queryset(request):
+    queryset = _scope_queryset(
+        Connection.objects.select_related("tenant", "workspace"),
+        request.user,
+    )
+    tenant_id = request.data.get("tenant_id") or request.query_params.get("tenant_id")
+    workspace_id = request.data.get("workspace_id") or request.query_params.get("workspace_id")
+    if tenant_id:
+        queryset = queryset.filter(tenant_id=tenant_id)
+    if workspace_id:
+        queryset = queryset.filter(workspace_id=workspace_id)
+    return queryset
+
+
+class EmailTemplateViewSet(viewsets.ModelViewSet):
+    serializer_class = EmailTemplateSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = EmailTemplate.objects.select_related("tenant", "workspace").all()
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return _scope_email_template_queryset(self.queryset.filter(is_active=True), self.request)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            payload = self.get_paginated_response(serializer.data).data
+            return success_response(data=payload, request=request)
+        serializer = self.get_serializer(queryset, many=True)
+        return success_response(
+            data={"items": serializer.data, "count": len(serializer.data)},
+            request=request,
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_object())
+        return success_response(data=serializer.data, request=request)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(
+                errors=serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        validated = serializer.validated_data
+        try:
+            template = create_template(
+                payload=validated,
+                tenant_id=getattr(validated.get("tenant"), "id", None),
+                workspace_id=getattr(validated.get("workspace"), "id", None),
+                actor_email=(getattr(request.user, "email", "") or "").strip(),
+            )
+        except EmailTemplateServiceError as exc:
+            return error_response(
+                errors=exc.errors or {"detail": [exc.message]},
+                message=exc.message,
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        return success_response(
+            data=self.get_serializer(template).data,
+            message="Email template created",
+            status=status.HTTP_201_CREATED,
+            request=request,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        template = self.get_object()
+        serializer = self.get_serializer(template, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return error_response(
+                errors=serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        try:
+            updated = update_template(
+                template,
+                payload=serializer.validated_data,
+                actor_email=(getattr(request.user, "email", "") or "").strip(),
+            )
+        except EmailTemplateServiceError as exc:
+            return error_response(
+                errors=exc.errors or {"detail": [exc.message]},
+                message=exc.message,
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        return success_response(
+            data=self.get_serializer(updated).data,
+            message="Email template updated",
+            request=request,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        template = self.get_object()
+        if template.is_system_template:
+            return error_response(
+                errors={"detail": ["System templates cannot be deleted."]},
+                message="Forbidden",
+                status=status.HTTP_403_FORBIDDEN,
+                request=request,
+            )
+        template.is_active = False
+        template.updated_by = (getattr(request.user, "email", "") or "").strip() or template.updated_by
+        template.save(update_fields=["is_active", "updated_by", "updated_at"])
+        return success_response(
+            data={"ok": True, "template_id": template.id},
+            message="Email template deleted",
+            request=request,
+        )
+
+    @action(detail=True, methods=["post"], url_path="duplicate")
+    def duplicate(self, request, pk=None):
+        template = self.get_object()
+        tenant_id = request.data.get("tenant_id") or template.tenant_id
+        workspace_id = request.data.get("workspace_id") or template.workspace_id
+        duplicated = duplicate_template(
+            template,
+            tenant_id=int(tenant_id) if tenant_id not in (None, "") else None,
+            workspace_id=int(workspace_id) if workspace_id not in (None, "") else None,
+            actor_email=(getattr(request.user, "email", "") or "").strip(),
+        )
+        return success_response(
+            data=self.get_serializer(duplicated).data,
+            message="Email template duplicated",
+            status=status.HTTP_201_CREATED,
+            request=request,
+        )
+
+    @action(detail=True, methods=["get"], url_path="versions")
+    def versions(self, request, pk=None):
+        template = self.get_object()
+        serializer = EmailTemplateVersionSerializer(template.versions.all(), many=True)
+        return success_response(
+            data={"items": serializer.data, "count": len(serializer.data)},
+            request=request,
+        )
+
+    @action(detail=True, methods=["post"], url_path="preview")
+    def preview(self, request, pk=None):
+        template = self.get_object()
+        payload_data = request.data.copy()
+        payload_data["template_id"] = template.id
+        serializer = EmailTemplatePreviewSerializer(data=payload_data)
+        if not serializer.is_valid():
+            return error_response(
+                errors=serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = serializer.validated_data
+        try:
+            preview = render_template_instance(
+                template,
+                payload=payload.get("payload"),
+                bindings=payload.get("bindings"),
+                subject_override=payload.get("subject_override", ""),
+                html_override=payload.get("html_override", ""),
+                text_override=payload.get("text_override", ""),
+                mode="preview",
+            )
+        except EmailTemplateServiceError as exc:
+            return error_response(
+                errors=exc.errors or {"detail": [exc.message]},
+                message=exc.message,
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        return success_response(data=preview, request=request)
+
+    @action(detail=True, methods=["post"], url_path="test-send")
+    def test_send(self, request, pk=None):
+        template = self.get_object()
+        payload_data = request.data.copy()
+        payload_data["template_id"] = template.id
+        serializer = EmailTemplateTestSendSerializer(data=payload_data)
+        if not serializer.is_valid():
+            return error_response(
+                errors=serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = serializer.validated_data
+        connection = _get_scoped_connection_queryset(request).filter(
+            id=payload["connection_id"],
+            is_active=True,
+            provider="email",
+        ).first()
+        if not connection:
+            return error_response(
+                errors={"connection_id": ["Connection not found."]},
+                message="Connection not found",
+                status=status.HTTP_404_NOT_FOUND,
+                request=request,
+            )
+        try:
+            connection_payload = get_connection_secret_payload(connection).payload
+            result = test_send_template(
+                template,
+                connection_payload=connection_payload,
+                connection_auth_type=connection.auth_type,
+                payload=payload.get("payload"),
+                bindings=payload.get("bindings"),
+                to=payload.get("to"),
+                cc=payload.get("cc"),
+                bcc=payload.get("bcc"),
+                reply_to=str(payload.get("reply_to") or ""),
+            )
+        except (EmailTemplateServiceError, EmailExecutionError, ConnectionSecretError) as exc:
+            errors = getattr(exc, "errors", None) or getattr(exc, "as_dict", lambda: {})()
+            return error_response(
+                errors=errors or {"detail": [str(exc)]},
+                message=str(getattr(exc, "message", exc)),
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        return success_response(
+            data=result,
+            message="Test email sent",
+            request=request,
+        )
+
+    @action(detail=False, methods=["post"], url_path="preview")
+    def preview_inline(self, request):
+        serializer = EmailTemplatePreviewSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error_response(
+                errors=serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = serializer.validated_data
+        if payload.get("template_id"):
+            template = self.get_queryset().filter(id=payload["template_id"]).first()
+            if not template:
+                return error_response(
+                    errors={"template_id": ["Template not found."]},
+                    message="Template not found",
+                    status=status.HTTP_404_NOT_FOUND,
+                    request=request,
+                )
+            try:
+                preview = render_template_instance(
+                    template,
+                    payload=payload.get("payload"),
+                    bindings=payload.get("bindings"),
+                    subject_override=payload.get("subject_override", ""),
+                    html_override=payload.get("html_override", ""),
+                    text_override=payload.get("text_override", ""),
+                    mode="preview",
+                )
+            except EmailTemplateServiceError as exc:
+                return error_response(
+                    errors=exc.errors or {"detail": [exc.message]},
+                    message=exc.message,
+                    status=status.HTTP_400_BAD_REQUEST,
+                    request=request,
+                )
+        else:
+            try:
+                definition = build_definition(payload)
+                preview = render_definition(
+                    definition,
+                    payload=payload.get("payload"),
+                    bindings=payload.get("bindings"),
+                    subject_override=payload.get("subject_override", ""),
+                    html_override=payload.get("html_override", ""),
+                    text_override=payload.get("text_override", ""),
+                    mode="preview",
+                )
+            except EmailTemplateServiceError as exc:
+                return error_response(
+                    errors=exc.errors or {"detail": [exc.message]},
+                    message=exc.message,
+                    status=status.HTTP_400_BAD_REQUEST,
+                    request=request,
+                )
+        return success_response(data=preview, request=request)
 
 
 class RunViewSet(
@@ -968,12 +1351,12 @@ class RunViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
-        run = serializer.save(status=RunStatus.QUEUED)
-        run = execute_run(run)
-        payload = RunDetailSerializer(run).data
+        run = serializer.save(status=RunStatus.QUEUED, queued_at=timezone.now())
+        enqueue_manual_run(run)
+        payload = RunSerializer(run).data
         return success_response(
             data=payload,
-            message="Run created",
+            message="Run queued",
             status=status.HTTP_201_CREATED,
             request=request,
         )

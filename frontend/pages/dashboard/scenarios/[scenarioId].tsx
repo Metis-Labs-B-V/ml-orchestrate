@@ -21,6 +21,7 @@ import {
   Maximize2,
   Minimize2,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   X,
@@ -34,15 +35,24 @@ import {
   createApiTokenConnection,
   startJiraOauth,
   activateScenario,
+  getRun,
+  listEmailTemplates,
   fetchIntegrationCatalog,
   getScenario,
   listConnections,
+  previewStoredEmailTemplate,
   publishScenario,
+  type RunSummary,
   runScenario,
   startJenkinsOauth,
   testConnection,
+  testSendEmailTemplate,
   updateScenario,
 } from "../../../lib/scenariosApi";
+import type {
+  EmailTemplatePreviewResult,
+  EmailTemplateRecord,
+} from "../../../types/emailTemplates";
 import type {
   ConnectionRecord,
   IntegrationApp,
@@ -69,9 +79,10 @@ const NODE_START_X = 110;
 const NODE_START_Y = 40;
 const NODE_GAP_X = 300;
 const NODE_GAP_Y = 170;
+const RUN_TERMINAL_STATUSES = new Set(["succeeded", "failed", "canceled"]);
 
 type NodeKind = "trigger" | "action" | "search" | "utility";
-type NodeProvider = "jira" | "jenkins" | "hubspot" | "http" | "json" | "other";
+type NodeProvider = "jira" | "jenkins" | "hubspot" | "email" | "http" | "json" | "other";
 type ModuleGroup = {
   label: string;
   modules: IntegrationModule[];
@@ -151,6 +162,32 @@ type JsonTokenOption = {
   nodeId: string;
 };
 
+type EmailComposeMode = "inline" | "template";
+
+type EmailTemplateBindingRow = {
+  id: string;
+  variableName: string;
+  label: string;
+  required: boolean;
+  sourceType: "mapped" | "custom";
+  sourceToken: string;
+  customValue: string;
+};
+
+type EmailTemplateNodeFormState = {
+  composeMode: EmailComposeMode;
+  templateId: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  fromEmail: string;
+  replyTo: string;
+  subjectOverride: string;
+  htmlOverride: string;
+  textOverride: string;
+  bindings: EmailTemplateBindingRow[];
+};
+
 type NodeContextActionId =
   | "run-module-only"
   | "add-error-handler"
@@ -179,6 +216,9 @@ const getNodeProvider = (nodeType: string): NodeProvider => {
   }
   if (prefix === "hubspot") {
     return "hubspot";
+  }
+  if (prefix === "email") {
+    return "email";
   }
   if (prefix === "http") {
     return "http";
@@ -546,6 +586,154 @@ const buildHttpNodeConfig = (state: HttpNodeFormState): Record<string, unknown> 
   return config;
 };
 
+const createDefaultEmailTemplateNodeForm = (): EmailTemplateNodeFormState => ({
+  composeMode: "inline",
+  templateId: "",
+  to: "",
+  cc: "",
+  bcc: "",
+  fromEmail: "",
+  replyTo: "",
+  subjectOverride: "",
+  htmlOverride: "",
+  textOverride: "",
+  bindings: [],
+});
+
+const normalizeEmailList = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return "";
+};
+
+const normalizeEmailTemplateBindings = (config: Record<string, unknown>): EmailTemplateBindingRow[] => {
+  const mappedValues =
+    asRecord(config.templateBindings) || asRecord(config.bindings) || {};
+  const literalValues =
+    asRecord(config.templatePayload) || asRecord(config.payload) || {};
+
+  const rows: EmailTemplateBindingRow[] = [];
+  const keys = new Set<string>([
+    ...Object.keys(mappedValues),
+    ...Object.keys(literalValues),
+  ]);
+  Array.from(keys).forEach((key, index) => {
+    const mappedValue = mappedValues[key];
+    const literalValue = literalValues[key];
+    const mappedToken =
+      typeof mappedValue === "string" && isTokenExpression(mappedValue) ? mappedValue.trim() : "";
+    rows.push({
+      id: `email_template_binding_${key}_${index}`,
+      variableName: key,
+      label: key,
+      required: false,
+      sourceType: mappedToken ? "mapped" : "custom",
+      sourceToken: mappedToken,
+      customValue:
+        mappedToken || literalValue === undefined || literalValue === null
+          ? ""
+          : typeof literalValue === "string"
+            ? literalValue
+            : JSON.stringify(literalValue),
+    });
+  });
+  return rows;
+};
+
+const normalizeEmailTemplateNodeForm = (
+  config: Record<string, unknown>
+): EmailTemplateNodeFormState => ({
+  composeMode:
+    String(config.composeMode || "inline").toLowerCase() === "template" ? "template" : "inline",
+  templateId: String(config.templateId || ""),
+  to: normalizeEmailList(config.to),
+  cc: normalizeEmailList(config.cc),
+  bcc: normalizeEmailList(config.bcc),
+  fromEmail: String(config.from || config.fromEmail || ""),
+  replyTo: String(config.replyTo || ""),
+  subjectOverride: String(config.subjectOverride || ""),
+  htmlOverride: String(config.htmlOverride || ""),
+  textOverride: String(config.textOverride || ""),
+  bindings: normalizeEmailTemplateBindings(config),
+});
+
+const parseCommaSeparatedList = (value: string): string[] =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const extractTokenPath = (token: string): string => {
+  const match = token.match(/^\s*\{\{\s*(.*?)\s*\}\}\s*$/);
+  return match?.[1] || "";
+};
+
+const parseTokenSegments = (path: string): Array<string | number> => {
+  const segments: Array<string | number> = [];
+  let current = "";
+  for (let index = 0; index < path.length; index += 1) {
+    const char = path[index];
+    if (char === ".") {
+      if (current) {
+        segments.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === "[") {
+      if (current) {
+        segments.push(current);
+        current = "";
+      }
+      const endIndex = path.indexOf("]", index);
+      if (endIndex === -1) {
+        break;
+      }
+      const raw = path.slice(index + 1, endIndex).trim();
+      if (/^\d+$/.test(raw)) {
+        segments.push(Number(raw));
+      } else {
+        segments.push(raw.replace(/^["']|["']$/g, ""));
+      }
+      index = endIndex;
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    segments.push(current);
+  }
+  return segments;
+};
+
+const getValueAtTokenPath = (source: unknown, segments: Array<string | number>): unknown => {
+  let current = source;
+  for (const segment of segments) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current) || current[segment] === undefined) {
+        return undefined;
+      }
+      current = current[segment];
+      continue;
+    }
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+    if (current === undefined) {
+      return undefined;
+    }
+  }
+  return current;
+};
+
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -578,6 +766,65 @@ const getRunStepErrorMessage = (step: RunStepView): string => {
     return message;
   }
   return "";
+};
+
+const hasRunSectionValue = (value: unknown): boolean => {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  const record = asRecord(value);
+  if (record) {
+    return Object.keys(record).length > 0;
+  }
+  return true;
+};
+
+const formatRunLabel = (value: unknown): string => {
+  const raw = String(value || "unknown").trim();
+  if (!raw) {
+    return "Unknown";
+  }
+  return raw
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((segment) => segment[0].toUpperCase() + segment.slice(1).toLowerCase())
+    .join(" ");
+};
+
+const formatRunDateTime = (value: unknown): string => {
+  if (typeof value !== "string" || !value.trim()) {
+    return "n/a";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
+const formatRunDurationMs = (value: unknown): string => {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "n/a";
+  }
+  if (value < 1000) {
+    return `${value} ms`;
+  }
+  const seconds = value / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)} s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
 };
 
 const parseHeaderValue = (value: string): HttpPair | null => {
@@ -984,7 +1231,8 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [isRunning, setIsRunning] = useState(false);
-  const [runOutput, setRunOutput] = useState<Record<string, unknown> | null>(null);
+  const [runOutput, setRunOutput] = useState<RunSummary | null>(null);
+  const [isRefreshingRunOutput, setIsRefreshingRunOutput] = useState(false);
   const [isRunOutputMinimized, setIsRunOutputMinimized] = useState(false);
   const [expandedRunSteps, setExpandedRunSteps] = useState<Record<string, boolean>>({});
   const [expandedRunSections, setExpandedRunSections] = useState<Record<string, boolean>>({});
@@ -1010,6 +1258,16 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const [httpBearerTokenPickerValue, setHttpBearerTokenPickerValue] = useState("");
   const [nodeConfigTokenPickerValue, setNodeConfigTokenPickerValue] = useState("");
   const [jsonFieldMappings, setJsonFieldMappings] = useState<JsonFieldMapping[]>([]);
+  const [emailNodeForm, setEmailNodeForm] = useState<EmailTemplateNodeFormState>(
+    createDefaultEmailTemplateNodeForm
+  );
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplateRecord[]>([]);
+  const [isEmailTemplatesLoading, setIsEmailTemplatesLoading] = useState(false);
+  const [emailTemplatePreview, setEmailTemplatePreview] =
+    useState<EmailTemplatePreviewResult | null>(null);
+  const [emailTemplatePreviewError, setEmailTemplatePreviewError] = useState("");
+  const [isEmailTemplatePreviewLoading, setIsEmailTemplatePreviewLoading] = useState(false);
+  const [isEmailTemplateTestSending, setIsEmailTemplateTestSending] = useState(false);
   const [connections, setConnections] = useState<ConnectionRecord[]>([]);
   const [isConnectionsLoading, setIsConnectionsLoading] = useState(false);
   const [isConnectionModalOpen, setIsConnectionModalOpen] = useState(false);
@@ -1029,6 +1287,24 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const [hubspotConnectionName, setHubspotConnectionName] = useState("HubSpot CRM connection");
   const [hubspotServiceUrl, setHubspotServiceUrl] = useState("https://api.hubapi.com");
   const [hubspotAccessToken, setHubspotAccessToken] = useState("");
+  const [emailConnectionAuthMode, setEmailConnectionAuthMode] = useState<"apiToken" | "oauth">(
+    "apiToken"
+  );
+  const [emailConnectionName, setEmailConnectionName] = useState("Email connection");
+  const [emailUsername, setEmailUsername] = useState("");
+  const [emailDefaultFromEmail, setEmailDefaultFromEmail] = useState("");
+  const [emailSmtpHost, setEmailSmtpHost] = useState("");
+  const [emailSmtpPort, setEmailSmtpPort] = useState("587");
+  const [emailSmtpUseSsl, setEmailSmtpUseSsl] = useState(false);
+  const [emailSmtpUseStarttls, setEmailSmtpUseStarttls] = useState(true);
+  const [emailSmtpPassword, setEmailSmtpPassword] = useState("");
+  const [emailSmtpAccessToken, setEmailSmtpAccessToken] = useState("");
+  const [emailImapHost, setEmailImapHost] = useState("");
+  const [emailImapPort, setEmailImapPort] = useState("993");
+  const [emailImapUseSsl, setEmailImapUseSsl] = useState(true);
+  const [emailImapPassword, setEmailImapPassword] = useState("");
+  const [emailImapAccessToken, setEmailImapAccessToken] = useState("");
+  const [emailMailbox, setEmailMailbox] = useState("INBOX");
 
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
@@ -1041,10 +1317,18 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const httpBodyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const graphRef = useRef<ScenarioGraph>({ nodes: [], edges: [] });
   const dragMovedRef = useRef(false);
+  const runPollRequestRef = useRef(0);
 
   useEffect(() => {
     graphRef.current = graph;
   }, [graph]);
+
+  useEffect(
+    () => () => {
+      runPollRequestRef.current += 1;
+    },
+    []
+  );
 
   const updateGraphState = useCallback((nextGraph: ScenarioGraph) => {
     setGraph(nextGraph);
@@ -1115,6 +1399,7 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const isSelectedTriggerNode = selectedNodeMeta?.kind === "trigger";
   const isSelectedHttpRequestNode = selectedNode?.type === "http.make_request";
   const isSelectedJsonCreateNode = selectedNode?.type === "json.create";
+  const isSelectedEmailSendNode = selectedNode?.type === "email.send";
 
   const selectedNodeProvider = useMemo<NodeProvider>(
     () => (selectedNode ? getNodeProvider(selectedNode.type) : "other"),
@@ -1125,7 +1410,8 @@ const ScenarioCanvasPage: DashboardPage = () => {
     () =>
       selectedNodeProvider === "jira" ||
       selectedNodeProvider === "jenkins" ||
-      selectedNodeProvider === "hubspot",
+      selectedNodeProvider === "hubspot" ||
+      selectedNodeProvider === "email",
     [selectedNodeProvider]
   );
 
@@ -1139,11 +1425,20 @@ const ScenarioCanvasPage: DashboardPage = () => {
     if (selectedNodeProvider === "hubspot") {
       return "Add HubSpot operation payload here. `connectionId` is managed by the connection field.";
     }
+    if (selectedNodeProvider === "email") {
+      if (selectedNode?.type === "email.send") {
+        return "Use `to`, `cc`, `bcc`, `subject`, `bodyText`/`bodyHtml`, and optional `attachments` (base64).";
+      }
+      if (selectedNode?.type === "email.watch.inbox") {
+        return "Use `mailbox`, `search`, `maxMessages`, `markAsSeen` for IMAP trigger polling.";
+      }
+      return "Add Email operation payload here. `connectionId` is managed by the connection field.";
+    }
     if (selectedNodeProvider === "json") {
       return "Use `payload` to create JSON output. Example: {\"payload\":{\"dealId\":\"{{http_1.body.id}}\"}}";
     }
     return "Add node-specific payload here.";
-  }, [selectedNodeProvider]);
+  }, [selectedNode, selectedNodeProvider]);
 
   const nodeById = useMemo(() => {
     const map = new Map<string, ScenarioNode>();
@@ -1156,6 +1451,12 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const flowTailNode = useMemo(
     () => getFlowTailNode(graph.nodes, graph.edges),
     [graph.edges, graph.nodes]
+  );
+
+  const selectedEmailTemplate = useMemo(
+    () =>
+      emailTemplates.find((template) => String(template.id) === emailNodeForm.templateId) || null,
+    [emailNodeForm.templateId, emailTemplates]
   );
 
   const floatingPlusPosition = useMemo(() => {
@@ -1262,9 +1563,7 @@ const ScenarioCanvasPage: DashboardPage = () => {
 
   const runStepOutputByNodeId = useMemo(() => {
     const stepMap = new Map<string, unknown>();
-    const steps = Array.isArray((runOutput as { steps?: unknown[] } | null)?.steps)
-      ? (((runOutput as { steps?: unknown[] })?.steps || []) as unknown[])
-      : [];
+    const steps = Array.isArray(runOutput?.steps) ? runOutput.steps : [];
     steps.forEach((step) => {
       if (!step || typeof step !== "object") {
         return;
@@ -1280,12 +1579,80 @@ const ScenarioCanvasPage: DashboardPage = () => {
   }, [runOutput]);
 
   const runSteps = useMemo(() => {
-    const steps = (runOutput as { steps?: unknown[] } | null)?.steps;
+    const steps = runOutput?.steps;
     if (!Array.isArray(steps)) {
       return [] as RunStepView[];
     }
     return steps.filter((step): step is RunStepView => Boolean(asRecord(step)));
   }, [runOutput]);
+
+  const runOutputMetadata = useMemo(
+    () => asRecord(runOutput?.metadata) || {},
+    [runOutput]
+  );
+
+  const runStepCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      canceled: 0,
+      unknown: 0,
+    };
+    runSteps.forEach((step) => {
+      const status = getRunStepStatus(step);
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [runSteps]);
+
+  const runLifecycleSummary = useMemo(() => {
+    const nodeCount = Number(runOutputMetadata.node_count || 0);
+    const executedNodes = Number(runOutputMetadata.executed_nodes || 0);
+    const startedAt = runOutput?.started_at || null;
+    const endedAt = runOutput?.ended_at || null;
+    const queuedAt = runOutput?.queued_at || null;
+    const durationMs =
+      startedAt && endedAt
+        ? Math.max(new Date(endedAt).getTime() - new Date(startedAt).getTime(), 0)
+        : null;
+    return {
+      runId: runOutput?.id || null,
+      status: String(runOutput?.status || "unknown").toLowerCase(),
+      triggerType: formatRunLabel(runOutput?.trigger_type || "manual"),
+      queuedAt,
+      startedAt,
+      endedAt,
+      durationMs,
+      attemptCount: Number(runOutput?.attempt_count || 0),
+      nodeCount: nodeCount > 0 ? nodeCount : runSteps.length,
+      executedNodes: executedNodes > 0 ? executedNodes : runSteps.length,
+    };
+  }, [runOutput, runOutputMetadata, runSteps.length]);
+
+  const latestRecoveryEvent = useMemo(() => {
+    const recoveryEvents = runOutputMetadata.recovery_events;
+    if (!Array.isArray(recoveryEvents) || !recoveryEvents.length) {
+      return null;
+    }
+    const lastEvent = recoveryEvents[recoveryEvents.length - 1];
+    return asRecord(lastEvent);
+  }, [runOutputMetadata]);
+
+  const runRecoveryMessage = useMemo(() => {
+    const fatalError = runOutputMetadata.fatal_error;
+    const fatalText = typeof fatalError === "string" ? fatalError : "";
+    if (!latestRecoveryEvent && !fatalText) {
+      return "";
+    }
+    const reason = formatRunLabel(latestRecoveryEvent?.reason || "recovered");
+    const at = latestRecoveryEvent?.at ? ` at ${formatRunDateTime(latestRecoveryEvent.at)}` : "";
+    if (fatalText) {
+      return `${reason}${at}. ${fatalText}`;
+    }
+    return `${reason}${at}.`;
+  }, [latestRecoveryEvent, runOutputMetadata]);
 
   useEffect(() => {
     if (!runSteps.length) {
@@ -1429,6 +1796,9 @@ const ScenarioCanvasPage: DashboardPage = () => {
       setCurlImportText("");
       setCurlImportError("");
       setJsonFieldMappings([]);
+      setEmailNodeForm(createDefaultEmailTemplateNodeForm());
+      setEmailTemplatePreview(null);
+      setEmailTemplatePreviewError("");
       setNodeConfigError("");
       return;
     }
@@ -1450,6 +1820,9 @@ const ScenarioCanvasPage: DashboardPage = () => {
       setNodeConfigJson("{}");
       setCurlImportError("");
       setJsonFieldMappings([]);
+      setEmailNodeForm(createDefaultEmailTemplateNodeForm());
+      setEmailTemplatePreview(null);
+      setEmailTemplatePreviewError("");
     } else if (selectedNode.type === "json.create") {
       const mappings = normalizeJsonFieldMappings(config);
       setJsonFieldMappings(
@@ -1473,6 +1846,27 @@ const ScenarioCanvasPage: DashboardPage = () => {
       setNodeConfigTokenPickerValue("");
       setCurlImportText("");
       setCurlImportError("");
+      setEmailNodeForm(createDefaultEmailTemplateNodeForm());
+      setEmailTemplatePreview(null);
+      setEmailTemplatePreviewError("");
+    } else if (selectedNode.type === "email.send") {
+      const normalizedEmailForm = normalizeEmailTemplateNodeForm(config);
+      setEmailNodeForm(normalizedEmailForm);
+      setNodeConfigJson(
+        normalizedEmailForm.composeMode === "inline" && Object.keys(config).length
+          ? JSON.stringify(config, null, 2)
+          : "{}"
+      );
+      setHttpNodeForm(createDefaultHttpNodeForm());
+      setHttpFocusedField("");
+      setHttpTokenPickerValue("");
+      setHttpBearerTokenPickerValue("");
+      setNodeConfigTokenPickerValue("");
+      setCurlImportText("");
+      setCurlImportError("");
+      setJsonFieldMappings([]);
+      setEmailTemplatePreview(null);
+      setEmailTemplatePreviewError("");
     } else {
       setNodeConfigJson(Object.keys(config).length ? JSON.stringify(config, null, 2) : "{}");
       setHttpNodeForm(createDefaultHttpNodeForm());
@@ -1483,9 +1877,60 @@ const ScenarioCanvasPage: DashboardPage = () => {
       setCurlImportText("");
       setCurlImportError("");
       setJsonFieldMappings([]);
+      setEmailNodeForm(createDefaultEmailTemplateNodeForm());
+      setEmailTemplatePreview(null);
+      setEmailTemplatePreviewError("");
     }
     setNodeConfigError("");
   }, [selectedNode]);
+
+  useEffect(() => {
+    if (!isSelectedEmailSendNode) {
+      return;
+    }
+    setEmailNodeForm((previous) => {
+      const existing = new Map(previous.bindings.map((item) => [item.variableName, item]));
+      const templateVariables = Array.isArray(selectedEmailTemplate?.variables_schema)
+        ? selectedEmailTemplate?.variables_schema
+        : [];
+      if (!templateVariables.length) {
+        return previous;
+      }
+      const nextBindings: EmailTemplateBindingRow[] = templateVariables.map((field, index) => {
+        const key = String(field?.key || "").trim();
+        const existingRow = existing.get(key);
+        return (
+          existingRow || {
+            id: `email_template_binding_${key || index}`,
+            variableName: key,
+            label: String(field?.label || key || `Variable ${index + 1}`),
+            required: Boolean(field?.required),
+            sourceType: "mapped",
+            sourceToken: "",
+            customValue:
+              field?.default === undefined || field?.default === null
+                ? ""
+                : typeof field.default === "string"
+                  ? field.default
+                  : JSON.stringify(field.default),
+          }
+        );
+      });
+      previous.bindings.forEach((binding) => {
+        if (templateVariables.some((field) => String(field?.key || "") === binding.variableName)) {
+          return;
+        }
+        if (!binding.variableName.trim()) {
+          return;
+        }
+        nextBindings.push(binding);
+      });
+      return {
+        ...previous,
+        bindings: nextBindings,
+      };
+    });
+  }, [isSelectedEmailSendNode, selectedEmailTemplate]);
 
   useEffect(() => {
     const handleOAuthMessage = (event: MessageEvent) => {
@@ -1691,7 +2136,13 @@ const ScenarioCanvasPage: DashboardPage = () => {
 
   const loadConnectionsForProvider = useCallback(
     async (provider: NodeProvider) => {
-      if ((provider !== "jira" && provider !== "jenkins" && provider !== "hubspot") || !scenario) {
+      if (
+        (provider !== "jira" &&
+          provider !== "jenkins" &&
+          provider !== "hubspot" &&
+          provider !== "email") ||
+        !scenario
+      ) {
         setConnections([]);
         return;
       }
@@ -1729,6 +2180,37 @@ const ScenarioCanvasPage: DashboardPage = () => {
     selectedNodeNeedsConnection,
     selectedNodeProvider,
   ]);
+
+  const loadEmailTemplatesForScenario = useCallback(async () => {
+    if (!scenario) {
+      setEmailTemplates([]);
+      return;
+    }
+    setIsEmailTemplatesLoading(true);
+    try {
+      const payload = await listEmailTemplates({
+        tenantId: scenario.tenant_id,
+        workspaceId: scenario.workspace_id ?? undefined,
+      });
+      setEmailTemplates(payload.items || []);
+    } catch (templateError) {
+      setEmailTemplates([]);
+      setError(
+        templateError instanceof Error
+          ? templateError.message
+          : "Unable to load email templates."
+      );
+    } finally {
+      setIsEmailTemplatesLoading(false);
+    }
+  }, [scenario]);
+
+  useEffect(() => {
+    if (!isSelectedEmailSendNode) {
+      return;
+    }
+    void loadEmailTemplatesForScenario();
+  }, [isSelectedEmailSendNode, loadEmailTemplatesForScenario]);
 
   const closeModulePicker = useCallback(() => {
     setIsPickerOpen(false);
@@ -2257,7 +2739,12 @@ const ScenarioCanvasPage: DashboardPage = () => {
       return;
     }
     const provider = getNodeProvider(selectedNode.type);
-    if (provider !== "jira" && provider !== "jenkins" && provider !== "hubspot") {
+    if (
+      provider !== "jira" &&
+      provider !== "jenkins" &&
+      provider !== "hubspot" &&
+      provider !== "email"
+    ) {
       setConnectionModalError("This node type does not require a connection.");
       return;
     }
@@ -2272,6 +2759,10 @@ const ScenarioCanvasPage: DashboardPage = () => {
     } else if (provider === "hubspot") {
       setHubspotConnectionName(`${selectedNode.app} connection`);
       setHubspotServiceUrl((previous) => previous || "https://api.hubapi.com");
+    } else if (provider === "email") {
+      setEmailConnectionName(`${selectedNode.app} connection`);
+      setEmailConnectionAuthMode("apiToken");
+      setEmailMailbox((previous) => previous || "INBOX");
     }
     setIsConnectionModalOpen(true);
   };
@@ -2431,6 +2922,83 @@ const ScenarioCanvasPage: DashboardPage = () => {
       setConnectionModalStatus("");
       setConnectionModalError(
         createError instanceof Error ? createError.message : "Unable to create HubSpot connection."
+      );
+    } finally {
+      setIsCreatingConnection(false);
+    }
+  };
+
+  const handleCreateEmailConnection = async () => {
+    const smtpHost = emailSmtpHost.trim();
+    const imapHost = emailImapHost.trim();
+    const smtpPassword = emailSmtpPassword;
+    const imapPassword = emailImapPassword || smtpPassword;
+    const smtpAccessToken = emailSmtpAccessToken.trim();
+    const imapAccessToken = emailImapAccessToken.trim() || smtpAccessToken;
+
+    if (!emailConnectionName.trim() || !emailUsername.trim()) {
+      setConnectionModalError("Connection name and username are required.");
+      return;
+    }
+    if (!smtpHost && !imapHost) {
+      setConnectionModalError("Provide at least one host: SMTP or IMAP.");
+      return;
+    }
+
+    if (emailConnectionAuthMode === "oauth") {
+      if ((smtpHost && !smtpAccessToken) || (imapHost && !imapAccessToken)) {
+        setConnectionModalError("OAuth mode requires access token fields for configured hosts.");
+        return;
+      }
+    } else if ((smtpHost && !smtpPassword) || (imapHost && !imapPassword)) {
+      setConnectionModalError("Password mode requires password fields for configured hosts.");
+      return;
+    }
+
+    setIsCreatingConnection(true);
+    setConnectionModalError("");
+    setConnectionModalStatus("");
+    try {
+      const created = await createApiTokenConnection({
+        provider: "email",
+        auth_type: emailConnectionAuthMode,
+        display_name: emailConnectionName.trim(),
+        tenant_id: scenario?.tenant_id,
+        workspace_id: scenario?.workspace_id ?? undefined,
+        secret_payload: {
+          username: emailUsername.trim(),
+          fromEmail: emailDefaultFromEmail.trim() || emailUsername.trim(),
+          smtpHost,
+          smtpPort: Number(emailSmtpPort || 0) || (emailSmtpUseSsl ? 465 : 587),
+          smtpUseSsl: emailSmtpUseSsl,
+          smtpUseStarttls: emailSmtpUseStarttls,
+          smtpPassword: emailConnectionAuthMode === "apiToken" ? smtpPassword : "",
+          smtpAccessToken: emailConnectionAuthMode === "oauth" ? smtpAccessToken : "",
+          imapHost,
+          imapPort: Number(emailImapPort || 0) || 993,
+          imapUseSsl: emailImapUseSsl,
+          imapPassword: emailConnectionAuthMode === "apiToken" ? imapPassword : "",
+          imapAccessToken: emailConnectionAuthMode === "oauth" ? imapAccessToken : "",
+          mailbox: emailMailbox.trim() || "INBOX",
+          password: emailConnectionAuthMode === "apiToken" ? smtpPassword : "",
+          accessToken: emailConnectionAuthMode === "oauth" ? smtpAccessToken : "",
+        },
+      });
+      await testConnection(created.id);
+      setConnections((previous) => [created, ...previous.filter((item) => item.id !== created.id)]);
+      setNodeConnection(String(created.id));
+      setConnectionModalStatus("Email connection created.");
+      setStatusMessage("Email connection created and selected.");
+      setIsConnectionModalOpen(false);
+      setEmailSmtpPassword("");
+      setEmailImapPassword("");
+      setEmailSmtpAccessToken("");
+      setEmailImapAccessToken("");
+      void loadConnectionsForProvider("email");
+    } catch (createError) {
+      setConnectionModalStatus("");
+      setConnectionModalError(
+        createError instanceof Error ? createError.message : "Unable to create Email connection."
       );
     } finally {
       setIsCreatingConnection(false);
@@ -2609,6 +3177,203 @@ const ScenarioCanvasPage: DashboardPage = () => {
     setStatusMessage("Mapped value applied to bearer token.");
   };
 
+  const updateEmailTemplateBinding = useCallback(
+    (bindingId: string, key: keyof EmailTemplateBindingRow, value: string | boolean) => {
+      setEmailNodeForm((previous) => ({
+        ...previous,
+        bindings: previous.bindings.map((binding) =>
+          binding.id === bindingId ? { ...binding, [key]: value } : binding
+        ),
+      }));
+      setNodeConfigError("");
+      setEmailTemplatePreviewError("");
+    },
+    []
+  );
+
+  const addEmailTemplateBinding = useCallback(() => {
+    setEmailNodeForm((previous) => ({
+      ...previous,
+      bindings: [
+        ...previous.bindings,
+        {
+          id: `email_template_binding_${Date.now()}`,
+          variableName: "",
+          label: "",
+          required: false,
+          sourceType: "mapped",
+          sourceToken: "",
+          customValue: "",
+        },
+      ],
+    }));
+  }, []);
+
+  const removeEmailTemplateBinding = useCallback((bindingId: string) => {
+    setEmailNodeForm((previous) => ({
+      ...previous,
+      bindings: previous.bindings.filter((binding) => binding.id !== bindingId),
+    }));
+  }, []);
+
+  const resolvePreviewTokenValue = useCallback(
+    (token: string): { found: boolean; value?: unknown } => {
+      const path = extractTokenPath(token);
+      if (!path) {
+        return { found: false };
+      }
+      const segments = parseTokenSegments(path);
+      const [nodeId, ...rest] = segments;
+      if (typeof nodeId !== "string" || !nodeId.trim()) {
+        return { found: false };
+      }
+      let source = runStepOutputByNodeId.get(nodeId);
+      if (source === undefined) {
+        const node = nodeById.get(nodeId);
+        if (node?.type === "json.create") {
+          source = asRecord(node.config)?.payload;
+        }
+      }
+      if (source === undefined) {
+        return { found: false };
+      }
+      if (!rest.length) {
+        return { found: true, value: source };
+      }
+      const value = getValueAtTokenPath(source, rest);
+      if (value === undefined) {
+        return { found: false };
+      }
+      return { found: true, value };
+    },
+    [nodeById, runStepOutputByNodeId]
+  );
+
+  const buildEmailTemplatePreviewPayload = useCallback(() => {
+    const payload: Record<string, unknown> = {};
+    const bindings: Record<string, unknown> = {};
+    const unresolved: string[] = [];
+
+    emailNodeForm.bindings.forEach((binding) => {
+      const variableName = binding.variableName.trim();
+      if (!variableName) {
+        return;
+      }
+      if (binding.sourceType === "mapped") {
+        const sourceToken = binding.sourceToken.trim();
+        if (!sourceToken) {
+          return;
+        }
+        const resolved = resolvePreviewTokenValue(sourceToken);
+        if (!resolved.found) {
+          unresolved.push(variableName);
+          return;
+        }
+        bindings[variableName] = resolved.value;
+        return;
+      }
+
+      if (!binding.customValue.trim()) {
+        return;
+      }
+      payload[variableName] = parseCustomJsonFieldValue(binding.customValue);
+    });
+
+    return {
+      payload,
+      bindings,
+      unresolved,
+    };
+  }, [emailNodeForm.bindings, resolvePreviewTokenValue]);
+
+  const handlePreviewEmailTemplate = useCallback(async () => {
+    if (!selectedEmailTemplate) {
+      setNodeConfigError("Select an email template first.");
+      return;
+    }
+    setIsEmailTemplatePreviewLoading(true);
+    setEmailTemplatePreviewError("");
+    setNodeConfigError("");
+    try {
+      const previewPayload = buildEmailTemplatePreviewPayload();
+      const preview = await previewStoredEmailTemplate({
+        templateId: selectedEmailTemplate.id,
+        data: {
+          payload: previewPayload.payload,
+          bindings: previewPayload.bindings,
+          subject_override: emailNodeForm.subjectOverride.trim(),
+          html_override: emailNodeForm.htmlOverride,
+          text_override: emailNodeForm.textOverride,
+        },
+      });
+      setEmailTemplatePreview(preview);
+      if (previewPayload.unresolved.length) {
+        setEmailTemplatePreviewError(
+          `Preview skipped unresolved mapped values: ${previewPayload.unresolved.join(", ")}. Run upstream nodes to resolve them.`
+        );
+      }
+    } catch (previewError) {
+      setEmailTemplatePreview(null);
+      setEmailTemplatePreviewError(
+        previewError instanceof Error ? previewError.message : "Unable to preview email template."
+      );
+    } finally {
+      setIsEmailTemplatePreviewLoading(false);
+    }
+  }, [buildEmailTemplatePreviewPayload, emailNodeForm.htmlOverride, emailNodeForm.subjectOverride, emailNodeForm.textOverride, selectedEmailTemplate]);
+
+  const handleTestSendSelectedEmailTemplate = useCallback(async () => {
+    if (!selectedEmailTemplate) {
+      setNodeConfigError("Select an email template first.");
+      return;
+    }
+    if (!nodeConnection.trim()) {
+      setNodeConfigError("Select an email connection first.");
+      return;
+    }
+    const toRecipients = parseCommaSeparatedList(emailNodeForm.to);
+    if (!toRecipients.length) {
+      setNodeConfigError("Add at least one recipient in To.");
+      return;
+    }
+    setIsEmailTemplateTestSending(true);
+    setNodeConfigError("");
+    try {
+      const previewPayload = buildEmailTemplatePreviewPayload();
+      await testSendEmailTemplate({
+        templateId: selectedEmailTemplate.id,
+        data: {
+          connection_id: Number(nodeConnection),
+          to: toRecipients,
+          cc: parseCommaSeparatedList(emailNodeForm.cc),
+          bcc: parseCommaSeparatedList(emailNodeForm.bcc),
+          reply_to: emailNodeForm.replyTo.trim(),
+          payload: previewPayload.payload,
+          bindings: previewPayload.bindings,
+          subject_override: emailNodeForm.subjectOverride.trim(),
+          html_override: emailNodeForm.htmlOverride,
+          text_override: emailNodeForm.textOverride,
+        },
+      });
+      setStatusMessage("Test email sent.");
+    } catch (sendError) {
+      setNodeConfigError(sendError instanceof Error ? sendError.message : "Unable to send test email.");
+    } finally {
+      setIsEmailTemplateTestSending(false);
+    }
+  }, [
+    buildEmailTemplatePreviewPayload,
+    emailNodeForm.bcc,
+    emailNodeForm.cc,
+    emailNodeForm.htmlOverride,
+    emailNodeForm.replyTo,
+    emailNodeForm.subjectOverride,
+    emailNodeForm.textOverride,
+    emailNodeForm.to,
+    nodeConnection,
+    selectedEmailTemplate,
+  ]);
+
   const handleNodeConfigSave = async () => {
     if (!scenario || !selectedNode) {
       return;
@@ -2670,6 +3435,99 @@ const ScenarioCanvasPage: DashboardPage = () => {
         return;
       }
       parsedConfig = { payload };
+    } else if (selectedNode.type === "email.send") {
+      if (emailNodeForm.composeMode === "template") {
+        if (!emailNodeForm.templateId.trim()) {
+          setNodeConfigError("Select an email template.");
+          return;
+        }
+        const templateBindings: Record<string, string> = {};
+        const templatePayload: Record<string, unknown> = {};
+
+        for (const binding of emailNodeForm.bindings) {
+          const variableName = binding.variableName.trim();
+          if (!variableName) {
+            if (
+              binding.sourceToken.trim() ||
+              binding.customValue.trim()
+            ) {
+              setNodeConfigError("Each template binding row requires a variable name.");
+              return;
+            }
+            continue;
+          }
+          if (binding.sourceType === "mapped") {
+            if (!binding.sourceToken.trim()) {
+              if (binding.required) {
+                setNodeConfigError(`Select a mapped value for required variable "${variableName}".`);
+                return;
+              }
+              continue;
+            }
+            templateBindings[variableName] = binding.sourceToken.trim();
+            continue;
+          }
+          if (!binding.customValue.trim()) {
+            if (binding.required) {
+              setNodeConfigError(`Provide a value for required variable "${variableName}".`);
+              return;
+            }
+            continue;
+          }
+          templatePayload[variableName] = parseCustomJsonFieldValue(binding.customValue);
+        }
+
+        const config: Record<string, unknown> = {
+          composeMode: "template",
+          templateId: Number(emailNodeForm.templateId),
+          to: parseCommaSeparatedList(emailNodeForm.to),
+          cc: parseCommaSeparatedList(emailNodeForm.cc),
+          bcc: parseCommaSeparatedList(emailNodeForm.bcc),
+        };
+        const recipients = [
+          ...(config.to as string[]),
+          ...(config.cc as string[]),
+          ...(config.bcc as string[]),
+        ];
+        if (!recipients.length) {
+          setNodeConfigError("Add at least one recipient in To, CC, or BCC.");
+          return;
+        }
+        if (Object.keys(templateBindings).length) {
+          config.templateBindings = templateBindings;
+        }
+        if (Object.keys(templatePayload).length) {
+          config.templatePayload = templatePayload;
+        }
+        if (emailNodeForm.fromEmail.trim()) {
+          config.from = emailNodeForm.fromEmail.trim();
+        }
+        if (emailNodeForm.replyTo.trim()) {
+          config.replyTo = emailNodeForm.replyTo.trim();
+        }
+        if (emailNodeForm.subjectOverride.trim()) {
+          config.subjectOverride = emailNodeForm.subjectOverride.trim();
+        }
+        if (emailNodeForm.htmlOverride.trim()) {
+          config.htmlOverride = emailNodeForm.htmlOverride;
+        }
+        if (emailNodeForm.textOverride.trim()) {
+          config.textOverride = emailNodeForm.textOverride;
+        }
+        parsedConfig = config;
+      } else if (nodeConfigJson.trim()) {
+        try {
+          const raw = JSON.parse(nodeConfigJson);
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+            setNodeConfigError("Operation config must be a JSON object.");
+            return;
+          }
+          parsedConfig = raw as Record<string, unknown>;
+        } catch {
+          setNodeConfigError("Operation config JSON is invalid.");
+          return;
+        }
+      }
     } else if (nodeConfigJson.trim()) {
       try {
         const raw = JSON.parse(nodeConfigJson);
@@ -2834,17 +3692,73 @@ const ScenarioCanvasPage: DashboardPage = () => {
     }
     setIsRunning(true);
     setError("");
+    const requestId = runPollRequestRef.current + 1;
+    runPollRequestRef.current = requestId;
     try {
-      const output = await runScenario(scenario.id);
-      setRunOutput(output);
+      const queuedRun = await runScenario(scenario.id);
+      setRunOutput(queuedRun);
       setIsRunOutputMinimized(false);
-      setStatusMessage("Run finished.");
+      const runId = Number(queuedRun.id);
+      if (!Number.isFinite(runId) || runId <= 0) {
+        setStatusMessage("Run queued.");
+        return;
+      }
+      setStatusMessage("Run queued.");
+
+      let latestRun = queuedRun;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const latestStatus = String(latestRun.status || "").toLowerCase();
+        if (RUN_TERMINAL_STATUSES.has(latestStatus)) {
+          setStatusMessage(`Run ${latestStatus}.`);
+          return;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+        if (runPollRequestRef.current !== requestId) {
+          return;
+        }
+        latestRun = await getRun(runId);
+        if (runPollRequestRef.current !== requestId) {
+          return;
+        }
+        setRunOutput(latestRun);
+        const status = String(latestRun.status || "").toLowerCase();
+        if (status === "running") {
+          setStatusMessage("Run in progress...");
+        }
+        if (RUN_TERMINAL_STATUSES.has(status)) {
+          setStatusMessage(`Run ${status}.`);
+          return;
+        }
+      }
+      setStatusMessage("Run is taking longer than expected. Refresh run output in a few seconds.");
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Unable to run scenario.");
     } finally {
-      setIsRunning(false);
+      if (runPollRequestRef.current === requestId) {
+        setIsRunning(false);
+      }
     }
   };
+
+  const handleRefreshRunOutput = useCallback(async () => {
+    const runId = Number(runOutput?.id);
+    if (!Number.isFinite(runId) || runId <= 0) {
+      return;
+    }
+    setIsRefreshingRunOutput(true);
+    setError("");
+    try {
+      const refreshedRun = await getRun(runId);
+      setRunOutput(refreshedRun);
+      setStatusMessage(`Latest run refreshed. Status: ${formatRunLabel(refreshedRun.status)}.`);
+    } catch (refreshError) {
+      setError(
+        refreshError instanceof Error ? refreshError.message : "Unable to refresh latest run."
+      );
+    } finally {
+      setIsRefreshingRunOutput(false);
+    }
+  }, [runOutput]);
 
   const toggleRunStep = (stepId: string) => {
     setExpandedRunSteps((previous) => ({
@@ -3891,6 +4805,386 @@ const ScenarioCanvasPage: DashboardPage = () => {
                   </pre>
                 </div>
               </>
+            ) : isSelectedEmailSendNode ? (
+              <>
+                <label className="scenario-config-label">Compose mode</label>
+                <select
+                  className="scenario-config-select"
+                  value={emailNodeForm.composeMode}
+                  onChange={(event) =>
+                    setEmailNodeForm((previous) => ({
+                      ...previous,
+                      composeMode:
+                        event.target.value === "template" ? "template" : "inline",
+                    }))
+                  }
+                >
+                  <option value="inline">Inline config</option>
+                  <option value="template">Template</option>
+                </select>
+
+                {emailNodeForm.composeMode === "template" ? (
+                  <>
+                    <div className="scenario-email-template-toolbar">
+                      <MLButton
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          void loadEmailTemplatesForScenario();
+                        }}
+                        disabled={isEmailTemplatesLoading}
+                      >
+                        Refresh templates
+                      </MLButton>
+                      <MLButton
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          if (typeof window !== "undefined") {
+                            window.open("/dashboard/email-templates", "_blank", "noopener,noreferrer");
+                          }
+                        }}
+                      >
+                        Open library
+                      </MLButton>
+                    </div>
+
+                    <label className="scenario-config-label">
+                      Template <span>*</span>
+                    </label>
+                    <select
+                      className="scenario-config-select"
+                      value={emailNodeForm.templateId}
+                      disabled={isEmailTemplatesLoading}
+                      onChange={(event) =>
+                        setEmailNodeForm((previous) => ({
+                          ...previous,
+                          templateId: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Select template</option>
+                      {emailTemplates.map((template) => (
+                        <option key={template.id} value={String(template.id)}>
+                          {template.name} ({template.category.replace(/_/g, " ")})
+                        </option>
+                      ))}
+                    </select>
+                    {selectedEmailTemplate ? (
+                      <div className="scenario-email-template-summary">
+                        <strong>{selectedEmailTemplate.name}</strong>
+                        <span>
+                          v{selectedEmailTemplate.current_version}
+                          {selectedEmailTemplate.is_system_template ? " · system" : ""}
+                        </span>
+                        <p>{selectedEmailTemplate.description || "Reusable template."}</p>
+                      </div>
+                    ) : null}
+
+                    <div className="scenario-http-grid">
+                      <label className="email-template-field">
+                        <span>To</span>
+                        <input
+                          className="scenario-config-input"
+                          value={emailNodeForm.to}
+                          onChange={(event) =>
+                            setEmailNodeForm((previous) => ({
+                              ...previous,
+                              to: event.target.value,
+                            }))
+                          }
+                          placeholder="user@example.com, ops@example.com"
+                        />
+                      </label>
+                      <label className="email-template-field">
+                        <span>CC</span>
+                        <input
+                          className="scenario-config-input"
+                          value={emailNodeForm.cc}
+                          onChange={(event) =>
+                            setEmailNodeForm((previous) => ({
+                              ...previous,
+                              cc: event.target.value,
+                            }))
+                          }
+                          placeholder="team@example.com"
+                        />
+                      </label>
+                      <label className="email-template-field">
+                        <span>BCC</span>
+                        <input
+                          className="scenario-config-input"
+                          value={emailNodeForm.bcc}
+                          onChange={(event) =>
+                            setEmailNodeForm((previous) => ({
+                              ...previous,
+                              bcc: event.target.value,
+                            }))
+                          }
+                          placeholder="audit@example.com"
+                        />
+                      </label>
+                      <label className="email-template-field">
+                        <span>From override</span>
+                        <input
+                          className="scenario-config-input"
+                          value={emailNodeForm.fromEmail}
+                          onChange={(event) =>
+                            setEmailNodeForm((previous) => ({
+                              ...previous,
+                              fromEmail: event.target.value,
+                            }))
+                          }
+                          placeholder="no-reply@example.com"
+                        />
+                      </label>
+                      <label className="email-template-field">
+                        <span>Reply-to</span>
+                        <input
+                          className="scenario-config-input"
+                          value={emailNodeForm.replyTo}
+                          onChange={(event) =>
+                            setEmailNodeForm((previous) => ({
+                              ...previous,
+                              replyTo: event.target.value,
+                            }))
+                          }
+                          placeholder="support@example.com"
+                        />
+                      </label>
+                    </div>
+
+                    <label className="scenario-config-label">Template variables</label>
+                    <div className="scenario-email-template-bindings">
+                      {emailNodeForm.bindings.length ? (
+                        emailNodeForm.bindings.map((binding) => (
+                          <div key={binding.id} className="scenario-email-template-binding-row">
+                            <input
+                              className="scenario-config-input"
+                              value={binding.variableName}
+                              onChange={(event) =>
+                                updateEmailTemplateBinding(
+                                  binding.id,
+                                  "variableName",
+                                  event.target.value
+                                )
+                              }
+                              placeholder="Variable name"
+                            />
+                            <select
+                              className="scenario-config-select"
+                              value={binding.sourceType}
+                              onChange={(event) =>
+                                updateEmailTemplateBinding(
+                                  binding.id,
+                                  "sourceType",
+                                  event.target.value
+                                )
+                              }
+                            >
+                              <option value="mapped">Mapped value</option>
+                              <option value="custom">Custom value</option>
+                            </select>
+                            {binding.sourceType === "mapped" ? (
+                              <select
+                                className="scenario-config-select"
+                                value={binding.sourceToken}
+                                onChange={(event) =>
+                                  updateEmailTemplateBinding(
+                                    binding.id,
+                                    "sourceToken",
+                                    event.target.value
+                                  )
+                                }
+                              >
+                                <option value="">Select prior node output</option>
+                                {binding.sourceToken &&
+                                !jsonMappingTokenOptions.some(
+                                  (option) => option.token === binding.sourceToken
+                                ) ? (
+                                  <option value={binding.sourceToken}>{binding.sourceToken}</option>
+                                ) : null}
+                                {jsonMappingTokenOptions.map((option) => (
+                                  <option key={`${binding.id}-${option.token}`} value={option.token}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                className="scenario-config-input"
+                                value={binding.customValue}
+                                onChange={(event) =>
+                                  updateEmailTemplateBinding(
+                                    binding.id,
+                                    "customValue",
+                                    event.target.value
+                                  )
+                                }
+                                placeholder='Custom value or JSON literal'
+                              />
+                            )}
+                            <button
+                              type="button"
+                              className="scenario-http-remove scenario-json-map-remove"
+                              onClick={() => removeEmailTemplateBinding(binding.id)}
+                              aria-label="Remove template binding"
+                              title="Remove binding"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                            <p className="scenario-config-hint scenario-email-template-binding-meta">
+                              {binding.label || binding.variableName || "Variable"}
+                              {binding.required ? " · required" : ""}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="scenario-config-hint">
+                          No variables are defined yet. Add custom variables if needed.
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        className="scenario-http-add"
+                        onClick={addEmailTemplateBinding}
+                      >
+                        + Add template variable
+                      </button>
+                    </div>
+
+                    <details className="scenario-http-advanced" open>
+                      <summary>Preview and overrides</summary>
+                      <label className="scenario-config-label">Subject override</label>
+                      <input
+                        className="scenario-config-input"
+                        value={emailNodeForm.subjectOverride}
+                        onChange={(event) =>
+                          setEmailNodeForm((previous) => ({
+                            ...previous,
+                            subjectOverride: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional subject override"
+                      />
+                      <label className="scenario-config-label">HTML override</label>
+                      <textarea
+                        className="scenario-config-textarea"
+                        value={emailNodeForm.htmlOverride}
+                        onChange={(event) =>
+                          setEmailNodeForm((previous) => ({
+                            ...previous,
+                            htmlOverride: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional HTML override"
+                      />
+                      <label className="scenario-config-label">Text override</label>
+                      <textarea
+                        className="scenario-config-textarea"
+                        value={emailNodeForm.textOverride}
+                        onChange={(event) =>
+                          setEmailNodeForm((previous) => ({
+                            ...previous,
+                            textOverride: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional text override"
+                      />
+                      <div className="scenario-email-template-toolbar">
+                        <MLButton
+                          type="button"
+                          variant="outline"
+                          onClick={handlePreviewEmailTemplate}
+                          disabled={!selectedEmailTemplate || isEmailTemplatePreviewLoading}
+                        >
+                          Preview
+                        </MLButton>
+                        <MLButton
+                          type="button"
+                          variant="outline"
+                          onClick={handleTestSendSelectedEmailTemplate}
+                          disabled={
+                            !selectedEmailTemplate ||
+                            !nodeConnection.trim() ||
+                            isEmailTemplateTestSending
+                          }
+                        >
+                          Test send
+                        </MLButton>
+                      </div>
+                      {emailTemplatePreviewError ? (
+                        <p className="scenario-config-error">{emailTemplatePreviewError}</p>
+                      ) : null}
+                      {emailTemplatePreview ? (
+                        <div className="scenario-email-template-preview">
+                          <div className="scenario-email-template-preview-section">
+                            <span>Subject</span>
+                            <strong>{emailTemplatePreview.subject || "No subject"}</strong>
+                          </div>
+                          <div className="scenario-email-template-preview-section">
+                            <span>HTML preview</span>
+                            <div
+                              className="scenario-email-template-preview-html"
+                              dangerouslySetInnerHTML={{
+                                __html:
+                                  emailTemplatePreview.html || "<p>No HTML content generated.</p>",
+                              }}
+                            />
+                          </div>
+                          <div className="scenario-email-template-preview-section">
+                            <span>Text preview</span>
+                            <pre>{emailTemplatePreview.text || "No text content generated."}</pre>
+                          </div>
+                          <p className="scenario-config-hint">
+                            Missing variables:{" "}
+                            {emailTemplatePreview.missing_variables.length
+                              ? emailTemplatePreview.missing_variables.join(", ")
+                              : "None"}
+                          </p>
+                        </div>
+                      ) : null}
+                    </details>
+                  </>
+                ) : (
+                  <>
+                    <label className="scenario-config-label">Insert mapped value</label>
+                    <div className="scenario-http-map-row">
+                      <select
+                        className="scenario-config-select"
+                        value={nodeConfigTokenPickerValue}
+                        onChange={(event) => setNodeConfigTokenPickerValue(event.target.value)}
+                      >
+                        <option value="">Select prior node output</option>
+                        {jsonMappingTokenOptions.map((option) => (
+                          <option key={`node-config-token-${option.token}`} value={option.token}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <MLButton
+                        type="button"
+                        variant="outline"
+                        onClick={handleInsertNodeConfigMappedToken}
+                        disabled={!nodeConfigTokenPickerValue}
+                      >
+                        Insert
+                      </MLButton>
+                    </div>
+                    <p className="scenario-config-hint">
+                      Keep existing inline email config for backward compatibility.
+                    </p>
+                    <label className="scenario-config-label">Operation config (JSON)</label>
+                    <textarea
+                      ref={nodeConfigTextareaRef}
+                      className="scenario-config-textarea"
+                      value={nodeConfigJson}
+                      onChange={(event) => setNodeConfigJson(event.target.value)}
+                      placeholder='{"to":["user@example.com"],"subject":"Hello","bodyText":"Hi there"}'
+                    />
+                  </>
+                )}
+              </>
             ) : (
               <>
                 <label className="scenario-config-label">Insert mapped value</label>
@@ -3973,6 +5267,10 @@ const ScenarioCanvasPage: DashboardPage = () => {
                     : "Jira API Token"
                   : selectedNodeProvider === "hubspot"
                     ? "HubSpot access token"
+                    : selectedNodeProvider === "email"
+                      ? emailConnectionAuthMode === "oauth"
+                        ? "Email OAuth (XOAUTH2)"
+                        : "Email SMTP/IMAP credentials"
                     : "Jenkins OAuth"}
               </p>
 
@@ -4086,6 +5384,173 @@ const ScenarioCanvasPage: DashboardPage = () => {
                     />
                   </label>
                 </div>
+              ) : selectedNodeProvider === "email" ? (
+                <div className="scenario-connection-form">
+                  <div className="scenario-connection-auth-switch">
+                    <button
+                      type="button"
+                      className={
+                        emailConnectionAuthMode === "apiToken"
+                          ? "scenario-connection-auth-button scenario-connection-auth-button--active"
+                          : "scenario-connection-auth-button"
+                      }
+                      onClick={() => setEmailConnectionAuthMode("apiToken")}
+                    >
+                      Password
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        emailConnectionAuthMode === "oauth"
+                          ? "scenario-connection-auth-button scenario-connection-auth-button--active"
+                          : "scenario-connection-auth-button"
+                      }
+                      onClick={() => setEmailConnectionAuthMode("oauth")}
+                    >
+                      OAuth token
+                    </button>
+                  </div>
+                  <label>
+                    Connection name
+                    <input
+                      value={emailConnectionName}
+                      onChange={(event) => setEmailConnectionName(event.target.value)}
+                      placeholder="Email connection"
+                    />
+                  </label>
+                  <label>
+                    Username / mailbox
+                    <input
+                      value={emailUsername}
+                      onChange={(event) => setEmailUsername(event.target.value)}
+                      placeholder="notifications@yourdomain.com"
+                    />
+                  </label>
+                  <label>
+                    Default from email (optional)
+                    <input
+                      value={emailDefaultFromEmail}
+                      onChange={(event) => setEmailDefaultFromEmail(event.target.value)}
+                      placeholder="notifications@yourdomain.com"
+                    />
+                  </label>
+
+                  <p className="scenario-config-hint">SMTP settings (required for email.send)</p>
+                  <div className="scenario-http-grid">
+                    <input
+                      value={emailSmtpHost}
+                      onChange={(event) => setEmailSmtpHost(event.target.value)}
+                      placeholder="smtp.example.com"
+                    />
+                    <input
+                      value={emailSmtpPort}
+                      onChange={(event) => setEmailSmtpPort(event.target.value)}
+                      placeholder={emailSmtpUseSsl ? "465" : "587"}
+                    />
+                  </div>
+                  <label className="scenario-http-toggle">
+                    <input
+                      type="checkbox"
+                      checked={emailSmtpUseSsl}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setEmailSmtpUseSsl(checked);
+                        if (checked) {
+                          setEmailSmtpUseStarttls(false);
+                        }
+                        setEmailSmtpPort((previous) => {
+                          const trimmed = previous.trim();
+                          if (trimmed && trimmed !== "587" && trimmed !== "465") {
+                            return previous;
+                          }
+                          return checked ? "465" : "587";
+                        });
+                      }}
+                    />
+                    Use SMTP SSL
+                  </label>
+                  <label className="scenario-http-toggle">
+                    <input
+                      type="checkbox"
+                      checked={emailSmtpUseStarttls}
+                      onChange={(event) => setEmailSmtpUseStarttls(event.target.checked)}
+                      disabled={emailSmtpUseSsl}
+                    />
+                    Use STARTTLS
+                  </label>
+                  {emailConnectionAuthMode === "oauth" ? (
+                    <label>
+                      SMTP access token
+                      <input
+                        type="password"
+                        value={emailSmtpAccessToken}
+                        onChange={(event) => setEmailSmtpAccessToken(event.target.value)}
+                        placeholder="OAuth access token"
+                      />
+                    </label>
+                  ) : (
+                    <label>
+                      SMTP password
+                      <input
+                        type="password"
+                        value={emailSmtpPassword}
+                        onChange={(event) => setEmailSmtpPassword(event.target.value)}
+                        placeholder="Mailbox or app password"
+                      />
+                    </label>
+                  )}
+
+                  <p className="scenario-config-hint">IMAP settings (required for email.watch.inbox)</p>
+                  <div className="scenario-http-grid">
+                    <input
+                      value={emailImapHost}
+                      onChange={(event) => setEmailImapHost(event.target.value)}
+                      placeholder="imap.example.com"
+                    />
+                    <input
+                      value={emailImapPort}
+                      onChange={(event) => setEmailImapPort(event.target.value)}
+                      placeholder="993"
+                    />
+                  </div>
+                  <label className="scenario-http-toggle">
+                    <input
+                      type="checkbox"
+                      checked={emailImapUseSsl}
+                      onChange={(event) => setEmailImapUseSsl(event.target.checked)}
+                    />
+                    Use IMAP SSL
+                  </label>
+                  {emailConnectionAuthMode === "oauth" ? (
+                    <label>
+                      IMAP access token (optional, falls back to SMTP token)
+                      <input
+                        type="password"
+                        value={emailImapAccessToken}
+                        onChange={(event) => setEmailImapAccessToken(event.target.value)}
+                        placeholder="OAuth access token"
+                      />
+                    </label>
+                  ) : (
+                    <label>
+                      IMAP password (optional, falls back to SMTP password)
+                      <input
+                        type="password"
+                        value={emailImapPassword}
+                        onChange={(event) => setEmailImapPassword(event.target.value)}
+                        placeholder="Mailbox or app password"
+                      />
+                    </label>
+                  )}
+                  <label>
+                    Default mailbox (optional)
+                    <input
+                      value={emailMailbox}
+                      onChange={(event) => setEmailMailbox(event.target.value)}
+                      placeholder="INBOX"
+                    />
+                  </label>
+                </div>
               ) : (
                 <div className="scenario-connection-form">
                   <label>
@@ -4153,6 +5618,14 @@ const ScenarioCanvasPage: DashboardPage = () => {
                   >
                     {isCreatingConnection ? "Creating..." : "Create connection"}
                   </MLButton>
+                ) : selectedNodeProvider === "email" ? (
+                  <MLButton
+                    type="button"
+                    onClick={handleCreateEmailConnection}
+                    disabled={isCreatingConnection}
+                  >
+                    {isCreatingConnection ? "Creating..." : "Create connection"}
+                  </MLButton>
                 ) : (
                   <MLButton
                     type="button"
@@ -4199,8 +5672,32 @@ const ScenarioCanvasPage: DashboardPage = () => {
               className="scenario-run-output-header"
               onMouseDown={handleRunOutputHeaderMouseDown}
             >
-              <h4>Latest run output</h4>
+              <div className="scenario-run-output-title">
+                <h4>Latest run output</h4>
+                <span className={`scenario-run-pill scenario-run-pill--${runLifecycleSummary.status}`}>
+                  {formatRunLabel(runLifecycleSummary.status)}
+                </span>
+              </div>
               <div className="scenario-run-output-actions">
+                <button
+                  type="button"
+                  className="scenario-run-output-action"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={() => {
+                    void handleRefreshRunOutput();
+                  }}
+                  disabled={isRefreshingRunOutput}
+                  aria-label="Refresh run output"
+                  title="Refresh"
+                >
+                  <RefreshCw
+                    className={
+                      isRefreshingRunOutput
+                        ? "h-4 w-4 scenario-run-output-action-icon--spinning"
+                        : "h-4 w-4"
+                    }
+                  />
+                </button>
                 <button
                   type="button"
                   className="scenario-run-output-action"
@@ -4230,20 +5727,60 @@ const ScenarioCanvasPage: DashboardPage = () => {
             {!isRunOutputMinimized ? (
               <div className="scenario-run-output-body">
                 <div className="scenario-run-summary">
-                  <span
-                    className={`scenario-run-pill scenario-run-pill--${
-                      String(runOutput.status || "unknown").toLowerCase()
-                    }`}
-                  >
-                    Run: {String(runOutput.status || "unknown")}
+                  <span className="scenario-run-meta-item">Run #{runLifecycleSummary.runId || "n/a"}</span>
+                  <span className="scenario-run-meta-item">
+                    Trigger: {runLifecycleSummary.triggerType}
                   </span>
                   <span className="scenario-run-meta-item">
-                    Steps: {runSteps.length}
+                    Attempts: {runLifecycleSummary.attemptCount || 1}
                   </span>
                   <span className="scenario-run-meta-item">
-                    Trigger: {String(runOutput.trigger_type || "manual")}
+                    Duration: {formatRunDurationMs(runLifecycleSummary.durationMs)}
                   </span>
                 </div>
+
+                <div className="scenario-run-metrics">
+                  <article className="scenario-run-metric-card">
+                    <span>Total steps</span>
+                    <strong>{runSteps.length}</strong>
+                  </article>
+                  <article className="scenario-run-metric-card">
+                    <span>Executed nodes</span>
+                    <strong>
+                      {runLifecycleSummary.executedNodes} / {runLifecycleSummary.nodeCount}
+                    </strong>
+                  </article>
+                  <article className="scenario-run-metric-card">
+                    <span>Succeeded</span>
+                    <strong>{runStepCounts.succeeded || 0}</strong>
+                  </article>
+                  <article className="scenario-run-metric-card">
+                    <span>Failed</span>
+                    <strong>{runStepCounts.failed || 0}</strong>
+                  </article>
+                </div>
+
+                <div className="scenario-run-timeline">
+                  <div className="scenario-run-timeline-item">
+                    <span>Queued</span>
+                    <strong>{formatRunDateTime(runLifecycleSummary.queuedAt)}</strong>
+                  </div>
+                  <div className="scenario-run-timeline-item">
+                    <span>Started</span>
+                    <strong>{formatRunDateTime(runLifecycleSummary.startedAt)}</strong>
+                  </div>
+                  <div className="scenario-run-timeline-item">
+                    <span>Ended</span>
+                    <strong>{formatRunDateTime(runLifecycleSummary.endedAt)}</strong>
+                  </div>
+                </div>
+
+                {runRecoveryMessage ? (
+                  <div className="scenario-run-warning">
+                    <strong>Recovery note</strong>
+                    <p>{runRecoveryMessage}</p>
+                  </div>
+                ) : null}
 
                 {runSteps.length ? (
                   <div className="scenario-run-steps">
@@ -4254,11 +5791,7 @@ const ScenarioCanvasPage: DashboardPage = () => {
                       const errorMessage = getRunStepErrorMessage(step);
                       const duration = step.duration_ms;
                       const stepTitle = String(step.node_type || step.node_id || stepId);
-                      const sections: Array<{
-                        key: "input" | "output" | "error";
-                        label: string;
-                        value: unknown;
-                      }> = [
+                      const sections = ([
                         { key: "input", label: "Input", value: step.input_json || {} },
                         {
                           key: "output",
@@ -4266,7 +5799,11 @@ const ScenarioCanvasPage: DashboardPage = () => {
                           value: step.output_raw_json || step.output_normalized_json || {},
                         },
                         { key: "error", label: "Error", value: step.error_json || {} },
-                      ];
+                      ] as Array<{
+                        key: "input" | "output" | "error";
+                        label: string;
+                        value: unknown;
+                      }>).filter((section) => hasRunSectionValue(section.value));
 
                       return (
                         <article
@@ -4296,37 +5833,43 @@ const ScenarioCanvasPage: DashboardPage = () => {
                               <div className="scenario-run-step-meta">
                                 <span>Node: {String(step.node_id || stepId)}</span>
                                 <span>
-                                  Duration: {typeof duration === "number" ? `${duration} ms` : "n/a"}
+                                  Duration: {formatRunDurationMs(duration)}
                                 </span>
                               </div>
                               {errorMessage ? (
                                 <p className="scenario-run-step-error-summary">{errorMessage}</p>
                               ) : null}
-                              <div className="scenario-run-step-sections">
-                                {sections.map((section) => {
-                                  const sectionKey = `${stepId}:${section.key}`;
-                                  const isSectionExpanded = Boolean(
-                                    expandedRunSections[sectionKey]
-                                  );
-                                  return (
-                                    <div key={sectionKey} className="scenario-run-step-section">
-                                      <div className="scenario-run-step-section-header">
-                                        <strong>{section.label}</strong>
-                                        <button
-                                          type="button"
-                                          className="scenario-run-step-section-toggle"
-                                          onClick={() => toggleRunSection(stepId, section.key)}
-                                        >
-                                          {isSectionExpanded ? "Hide" : "Show"}
-                                        </button>
+                              {sections.length ? (
+                                <div className="scenario-run-step-sections">
+                                  {sections.map((section) => {
+                                    const sectionKey = `${stepId}:${section.key}`;
+                                    const isSectionExpanded = Boolean(
+                                      expandedRunSections[sectionKey]
+                                    );
+                                    return (
+                                      <div key={sectionKey} className="scenario-run-step-section">
+                                        <div className="scenario-run-step-section-header">
+                                          <strong>{section.label}</strong>
+                                          <button
+                                            type="button"
+                                            className="scenario-run-step-section-toggle"
+                                            onClick={() => toggleRunSection(stepId, section.key)}
+                                          >
+                                            {isSectionExpanded ? "Hide" : "Show"}
+                                          </button>
+                                        </div>
+                                        {isSectionExpanded ? (
+                                          <pre>{JSON.stringify(section.value ?? {}, null, 2)}</pre>
+                                        ) : null}
                                       </div>
-                                      {isSectionExpanded ? (
-                                        <pre>{JSON.stringify(section.value ?? {}, null, 2)}</pre>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })}
-                              </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="scenario-config-hint">
+                                  No structured input/output payload was captured for this step.
+                                </p>
+                              )}
                             </div>
                           ) : null}
                         </article>
@@ -4334,7 +5877,13 @@ const ScenarioCanvasPage: DashboardPage = () => {
                     })}
                   </div>
                 ) : (
-                  <pre>{JSON.stringify(runOutput, null, 2)}</pre>
+                  <div className="scenario-run-empty">
+                    <strong>No step output captured yet.</strong>
+                    <p>
+                      This usually means the run is still waiting, still executing, or failed before
+                      a node produced structured step output.
+                    </p>
+                  </div>
                 )}
 
                 <details className="scenario-run-raw-toggle">

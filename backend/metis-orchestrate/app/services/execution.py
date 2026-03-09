@@ -1,29 +1,29 @@
-import ast
 import json
-import re
 from collections import deque
 from time import perf_counter
 from typing import Any
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
+from app.integrations.email import EmailAdapter, EmailExecutionError
 from app.integrations.http import HttpAdapter, HttpExecutionError
 from app.integrations.hubspot import HubspotAdapter, HubspotExecutionError
 from app.integrations.jenkins import JenkinsAdapter, JenkinsExecutionError
 from app.integrations.jira import JiraAdapter, JiraExecutionError
 from app.models import (
     Connection,
+    EmailTemplate,
     Run,
     RunStatus,
     RunStep,
     RunStepStatus,
     Scenario,
 )
-
-TOKEN_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
-FULL_TOKEN_RE = re.compile(r"^\s*\{\{\s*(.*?)\s*\}\}\s*$")
-HELPER_RE = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\((.*)\))?$")
+from app.services.connection_secrets import get_connection_secret_payload
+from app.services.email_templates import EmailTemplateServiceError, render_template_instance
+from app.services.template_runtime import render_payload
 
 
 class ExecutionError(Exception):
@@ -83,156 +83,8 @@ def _topological_node_order(nodes: list[dict[str, Any]], edges: list[dict[str, A
     return [node_map[node_id] for node_id in ordered_ids if node_id in node_map]
 
 
-def _split_pipeline(expression: str) -> list[str]:
-    return [part.strip() for part in expression.split("|") if part.strip()]
-
-
-def _parse_reference(value: str) -> tuple[str, list[Any]]:
-    value = value.strip()
-    if not value:
-        return "", []
-
-    idx = 0
-    while idx < len(value) and value[idx] not in ".[":
-        idx += 1
-    node_id = value[:idx]
-    remainder = value[idx:]
-    tokens: list[Any] = []
-    i = 0
-    while i < len(remainder):
-        char = remainder[i]
-        if char == ".":
-            i += 1
-            start = i
-            while i < len(remainder) and remainder[i] not in ".[":
-                i += 1
-            key = remainder[start:i]
-            if key:
-                tokens.append(key)
-            continue
-        if char == "[":
-            end = remainder.find("]", i)
-            if end == -1:
-                raise ExecutionError(f"Invalid token reference: {value}")
-            raw = remainder[i + 1 : end].strip()
-            if (raw.startswith('"') and raw.endswith('"')) or (
-                raw.startswith("'") and raw.endswith("'")
-            ):
-                tokens.append(raw[1:-1])
-            elif raw.isdigit():
-                tokens.append(int(raw))
-            else:
-                tokens.append(raw)
-            i = end + 1
-            continue
-        start = i
-        while i < len(remainder) and remainder[i] not in ".[":
-            i += 1
-        key = remainder[start:i]
-        if key:
-            tokens.append(key)
-    return node_id, tokens
-
-
-def _lookup_reference(expression: str, context: dict[str, Any]) -> Any:
-    node_id, tokens = _parse_reference(expression)
-    if not node_id:
-        return None
-    if node_id not in context:
-        return None
-    value = context.get(node_id)
-    for token in tokens:
-        if isinstance(token, int):
-            if isinstance(value, list) and 0 <= token < len(value):
-                value = value[token]
-            else:
-                return None
-            continue
-        if isinstance(value, dict):
-            value = value.get(token)
-        else:
-            return None
-    return value
-
-
-def _parse_helper_args(raw_args: str, context: dict[str, Any]) -> list[Any]:
-    if not raw_args:
-        return []
-    try:
-        parsed = ast.literal_eval(f"[{raw_args}]")
-    except Exception:
-        parsed = [raw_args]
-    resolved: list[Any] = []
-    for arg in parsed:
-        if isinstance(arg, str):
-            token_match = FULL_TOKEN_RE.match(arg)
-            if token_match:
-                resolved.append(_evaluate_expression(token_match.group(1), context))
-            else:
-                resolved.append(arg)
-        else:
-            resolved.append(arg)
-    return resolved
-
-
-def _apply_helper(name: str, value: Any, args: list[Any]) -> Any:
-    helper = name.lower()
-    if helper == "default":
-        if value in (None, "", [], {}):
-            return args[0] if args else value
-        return value
-    if helper == "concat":
-        pieces = ["" if value is None else str(value)] + [str(arg) for arg in args]
-        return "".join(pieces)
-    if helper == "upper":
-        return str(value or "").upper()
-    if helper == "lower":
-        return str(value or "").lower()
-    if helper == "trim":
-        return str(value or "").strip()
-    return value
-
-
-def _evaluate_expression(expression: str, context: dict[str, Any]) -> Any:
-    pipeline = _split_pipeline(expression)
-    if not pipeline:
-        return None
-    value = _lookup_reference(pipeline[0], context)
-
-    for part in pipeline[1:]:
-        match = HELPER_RE.match(part)
-        if not match:
-            continue
-        helper_name = match.group(1)
-        helper_args = _parse_helper_args(match.group(2) or "", context)
-        value = _apply_helper(helper_name, value, helper_args)
-    return value
-
-
-def _resolve_template_string(value: str, context: dict[str, Any]) -> Any:
-    full = FULL_TOKEN_RE.match(value)
-    if full:
-        return _evaluate_expression(full.group(1), context)
-
-    def _replace(match: re.Match[str]) -> str:
-        evaluated = _evaluate_expression(match.group(1), context)
-        if evaluated is None:
-            return ""
-        if isinstance(evaluated, (dict, list)):
-            return json.dumps(evaluated)
-        return str(evaluated)
-
-    return TOKEN_RE.sub(_replace, value)
-
-
 def _resolve_payload(payload: Any, context: dict[str, Any]) -> Any:
-    if isinstance(payload, dict):
-        return {key: _resolve_payload(val, context) for key, val in payload.items()}
-    if isinstance(payload, list):
-        return [_resolve_payload(item, context) for item in payload]
-    if isinstance(payload, str):
-        return _resolve_template_string(payload, context)
-    return payload
+    return render_payload(payload, context).value
 
 
 def _get_connection_for_run(run: Run, connection_id: Any) -> Connection:
@@ -257,8 +109,9 @@ def _get_connection_for_run(run: Run, connection_id: Any) -> Connection:
 
 def _execute_jira_node(run: Run, node_type: str, config: dict[str, Any]) -> Any:
     connection = _get_connection_for_run(run, config.get("connectionId"))
+    connection_payload = get_connection_secret_payload(connection).payload
     adapter = JiraAdapter(
-        connection.secret_payload or {},
+        connection_payload,
         auth_type=connection.auth_type,
     )
     return adapter.execute(node_type, config)
@@ -266,7 +119,8 @@ def _execute_jira_node(run: Run, node_type: str, config: dict[str, Any]) -> Any:
 
 def _execute_jenkins_node(run: Run, node_type: str, config: dict[str, Any]) -> Any:
     connection = _get_connection_for_run(run, config.get("connectionId"))
-    adapter = JenkinsAdapter(connection.secret_payload or {})
+    connection_payload = get_connection_secret_payload(connection).payload
+    adapter = JenkinsAdapter(connection_payload)
 
     if node_type == "jenkins.api.call":
         return adapter.api_call(config)
@@ -275,8 +129,9 @@ def _execute_jenkins_node(run: Run, node_type: str, config: dict[str, Any]) -> A
 
 def _execute_hubspot_node(run: Run, node_type: str, config: dict[str, Any]) -> Any:
     connection = _get_connection_for_run(run, config.get("connectionId"))
+    connection_payload = get_connection_secret_payload(connection).payload
     adapter = HubspotAdapter(
-        connection.secret_payload or {},
+        connection_payload,
         auth_type=connection.auth_type,
     )
     return adapter.execute(node_type, config)
@@ -291,6 +146,70 @@ def _execute_http_node(node_type: str, config: dict[str, Any]) -> Any:
     if node_type == "http.resolve_url":
         return adapter.resolve_url(config)
     raise ExecutionError(f"Unsupported HTTP node type: {node_type}")
+
+
+def _get_email_template_for_run(run: Run, template_id: Any) -> EmailTemplate:
+    try:
+        template_id_int = int(template_id)
+    except (TypeError, ValueError):
+        raise ExecutionError("Node is missing a valid templateId.")
+
+    queryset = EmailTemplate.objects.filter(id=template_id_int, is_active=True)
+    scope_filter = Q(
+        is_system_template=True,
+        tenant__isnull=True,
+        workspace__isnull=True,
+    )
+    if (run.created_by or "").strip():
+        scope_filter |= Q(created_by__iexact=run.created_by, is_system_template=False)
+    if run.workspace_id:
+        scope_filter &= Q(Q(workspace_id=run.workspace_id) | Q(workspace__isnull=True))
+    if run.tenant_id:
+        scope_filter &= Q(Q(tenant_id=run.tenant_id) | Q(tenant__isnull=True))
+    queryset = queryset.filter(scope_filter)
+    template = queryset.first()
+    if not template:
+        raise ExecutionError(f"Email template {template_id} not found in run scope.")
+    return template
+
+
+def _execute_email_node(run: Run, node_type: str, config: dict[str, Any]) -> Any:
+    connection = _get_connection_for_run(run, config.get("connectionId"))
+    connection_payload = get_connection_secret_payload(connection).payload
+    resolved_config = dict(config)
+    if node_type == "email.send" and str(config.get("composeMode") or "inline") == "template":
+        template = _get_email_template_for_run(run, config.get("templateId"))
+        try:
+            rendered = render_template_instance(
+                template,
+                payload=config.get("templatePayload") if isinstance(config.get("templatePayload"), dict) else None,
+                bindings=config.get("templateBindings") if isinstance(config.get("templateBindings"), dict) else None,
+                subject_override=str(config.get("subjectOverride") or ""),
+                html_override=str(config.get("htmlOverride") or ""),
+                text_override=str(config.get("textOverride") or ""),
+                mode="execution",
+            )
+        except EmailTemplateServiceError as exc:
+            raise ExecutionError(exc.message, details=exc.errors)
+        resolved_config.update(
+            {
+                "subject": rendered["subject"],
+                "bodyHtml": rendered["html"],
+                "bodyText": rendered["text"],
+                "renderedTemplate": {
+                    "templateId": template.id,
+                    "templateSlug": template.slug,
+                    "version": template.current_version,
+                    "missingVariables": rendered["missing_variables"],
+                    "usedVariables": rendered["used_variables"],
+                },
+            }
+        )
+    adapter = EmailAdapter(
+        connection_payload,
+        auth_type=connection.auth_type,
+    )
+    return adapter.execute(node_type, resolved_config)
 
 
 def _execute_json_node(node_type: str, config: dict[str, Any]) -> Any:
@@ -330,6 +249,9 @@ def _execute_node(
     if node_type.startswith("http."):
         return _execute_http_node(node_type, config)
 
+    if node_type.startswith("email."):
+        return _execute_email_node(run, node_type, config)
+
     if node_type.startswith("json."):
         return _execute_json_node(node_type, config)
 
@@ -353,11 +275,15 @@ def execute_run(run: Run) -> Run:
         run.save(update_fields=["status", "ended_at", "metadata", "updated_at"])
         return run
 
-    run.status = RunStatus.RUNNING
-    run.started_at = run.started_at or timezone.now()
-    run.ended_at = None
-    run.metadata = {}
-    run.save(update_fields=["status", "started_at", "ended_at", "metadata", "updated_at"])
+    if run.status != RunStatus.RUNNING or not run.started_at:
+        run.status = RunStatus.RUNNING
+        run.started_at = run.started_at or timezone.now()
+        run.ended_at = None
+        if not isinstance(run.metadata, dict):
+            run.metadata = {}
+        run.save(
+            update_fields=["status", "started_at", "ended_at", "metadata", "updated_at"]
+        )
 
     execution_context: dict[str, Any] = {}
     ordered_nodes = _topological_node_order(nodes, edges)
@@ -410,6 +336,12 @@ def execute_run(run: Run) -> Run:
             step.error_json = _safe_json(exc.as_dict())
             step.output_raw_json = {}
             step.output_normalized_json = {}
+        except EmailExecutionError as exc:
+            any_failure = True
+            step.status = RunStepStatus.FAILED
+            step.error_json = _safe_json(exc.as_dict())
+            step.output_raw_json = {}
+            step.output_normalized_json = {}
         except ExecutionError as exc:
             any_failure = True
             step.status = RunStepStatus.FAILED
@@ -441,7 +373,9 @@ def execute_run(run: Run) -> Run:
 
     run.status = RunStatus.FAILED if any_failure else RunStatus.SUCCEEDED
     run.ended_at = timezone.now()
+    base_metadata = run.metadata if isinstance(run.metadata, dict) else {}
     run.metadata = {
+        **base_metadata,
         "node_count": len(ordered_nodes),
         "executed_nodes": len(execution_context),
     }

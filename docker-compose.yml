@@ -10,12 +10,71 @@ services:
       - "8001:8001"
     env_file:
       - ./backend/.env
+    environment:
+      RUN_MIGRATIONS: "true"
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8001"]
     volumes:
       - ./backend/metis-orchestrate:/app
       - ./backend/common_utils:/app/common_utils
+    depends_on:
+      - redis
     networks:
       - custom_network
 
+  metis-orchestrate-worker:
+    build:
+      context: ./backend/metis-orchestrate
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      RUN_MIGRATIONS: "false"
+    command:
+      [
+        "celery",
+        "-A",
+        "core",
+        "worker",
+        "-l",
+        "info",
+        "--concurrency=${CELERY_WORKER_CONCURRENCY:-2}",
+      ]
+    volumes:
+      - ./backend/metis-orchestrate:/app
+      - ./backend/common_utils:/app/common_utils
+    depends_on:
+      - redis
+      - metis-orchestrate
+    networks:
+      - custom_network
+
+  metis-orchestrate-beat:
+    build:
+      context: ./backend/metis-orchestrate
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      RUN_MIGRATIONS: "false"
+    command: ["celery", "-A", "core", "beat", "-l", "info"]
+    volumes:
+      - ./backend/metis-orchestrate:/app
+      - ./backend/common_utils:/app/common_utils
+    depends_on:
+      - redis
+      - metis-orchestrate
+    networks:
+      - custom_network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - custom_network
 
   frontend:
     build:

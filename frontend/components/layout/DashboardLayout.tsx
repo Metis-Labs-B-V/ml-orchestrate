@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  Mail,
   Moon,
   Settings,
   Shield,
@@ -86,6 +87,7 @@ export default function DashboardLayout({ title, description, hideHeader, childr
         ? [{ label: t("nav.tenants"), href: "/dashboard/tenants", icon: LayoutDashboard }]
         : []),
       { label: t("nav.scenarios"), href: "/dashboard/scenarios", icon: GitBranch },
+      { label: "Email Templates", href: "/dashboard/email-templates", icon: Mail },
       ...(canManageUsers
         ? [{ label: t("nav.users"), href: "/dashboard/my-users", icon: Users }]
         : []),

@@ -105,7 +105,7 @@ const sessionSlice = createSlice({
       .addCase(validateSession.rejected, (state) => {
         state.user = null;
         state.impersonator = null;
-        state.ready = false;
+        state.ready = true;
       });
   },
 });

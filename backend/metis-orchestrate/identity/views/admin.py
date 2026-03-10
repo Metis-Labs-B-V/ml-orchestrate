@@ -1,5 +1,6 @@
 """Admin-only user management views."""
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -12,7 +13,9 @@ from ..serializers import AdminUserUpdateSerializer, UserSerializer
 
 class AdminUserDetailView(APIView):
     permission_classes = [IsAuthenticated, HasAdminAccess]
+    serializer_class = AdminUserUpdateSerializer
 
+    @extend_schema(request=AdminUserUpdateSerializer)
     def patch(self, request, user_id):
         user = User.objects.filter(id=user_id).first()
         if not user:

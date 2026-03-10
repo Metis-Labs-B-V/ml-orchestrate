@@ -8,6 +8,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.shortcuts import redirect
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
@@ -18,14 +19,19 @@ from common_utils.api.responses import error_response, success_response
 from ..activity_log import log_activity
 from ..jwe import encrypt_token
 from ..models import SsoLoginToken, SsoState, User
+from ..openapi_serializers import EmptySerializer, ToggleEnabledRequestSerializer
 from ..serializers import SsoExchangeSerializer, UserSerializer
 
 
 class SsoToggleView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = ToggleEnabledRequestSerializer
 
+    @extend_schema(request=ToggleEnabledRequestSerializer)
     def post(self, request):
-        enabled = bool(request.data.get("enabled", False))
+        serializer = ToggleEnabledRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        enabled = serializer.validated_data["enabled"]
         previous = bool(request.user.sso_enabled)
         request.user.sso_enabled = enabled
         request.user.save(update_fields=["sso_enabled"])
@@ -51,6 +57,7 @@ class SsoToggleView(APIView):
 
 class SsoStartView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = EmptySerializer
 
     def post(self, request, provider):
         state = str(uuid4())
@@ -92,6 +99,7 @@ class SsoStartView(APIView):
 
 class SsoCallbackView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = EmptySerializer
 
     def get(self, request, provider):
         code = request.query_params.get("code")
@@ -219,7 +227,9 @@ class SsoCallbackView(APIView):
 
 class SsoExchangeView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = SsoExchangeSerializer
 
+    @extend_schema(request=SsoExchangeSerializer)
     def post(self, request):
         serializer = SsoExchangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

@@ -8,6 +8,7 @@ from django.conf import settings
 from django.core import signing
 from django.db.models import Q
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -32,6 +33,16 @@ from app.models import (
     ScheduleTriggerType,
     ScenarioStatus,
     ScenarioVersion,
+)
+from app.openapi_serializers import (
+    EmptySerializer,
+    EmailTemplateDuplicateRequestSerializer,
+    JenkinsOAuthExchangeRequestSerializer,
+    JenkinsOAuthStartRequestSerializer,
+    JiraOAuthExchangeRequestSerializer,
+    JiraOAuthStartRequestSerializer,
+    ScenarioPublishRequestSerializer,
+    ScenarioScheduleRequestSerializer,
 )
 from app.serializers import (
     ConnectionSerializer,
@@ -72,6 +83,7 @@ from app.services.email_templates import (
 from app.services.run_dispatcher import enqueue_manual_run
 
 
+@extend_schema(request=None, responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request):
@@ -110,6 +122,7 @@ def _apply_scope_query_params(
 
 class IntegrationCatalogView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = EmptySerializer
 
     def get(self, request):
         return success_response(data=get_integration_catalog(), request=request)
@@ -117,12 +130,6 @@ class IntegrationCatalogView(APIView):
 
 def _normalize_url_value(value):
     return str(value or "").strip().rstrip("/").lower()
-
-
-def _coerce_optional_int(value):
-    if value in (None, ""):
-        return None
-    return int(value)
 
 
 def _select_jira_resource(resources, preferred_service_url=""):
@@ -150,8 +157,20 @@ def _pkce_challenge(verifier):
 
 class JiraOAuthStartView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = JiraOAuthStartRequestSerializer
 
+    @extend_schema(request=JiraOAuthStartRequestSerializer)
     def post(self, request):
+        payload_serializer = JiraOAuthStartRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+
         authorize_url = getattr(settings, "JIRA_OAUTH_AUTHORIZE_URL", "")
         client_id = getattr(settings, "JIRA_OAUTH_CLIENT_ID", "")
         redirect_uri = getattr(settings, "JIRA_OAUTH_REDIRECT_URI", "")
@@ -168,29 +187,10 @@ class JiraOAuthStartView(APIView):
                 request=request,
             )
 
-        service_url = str(request.data.get("service_url") or "").strip()
-        workspace_id = request.data.get("workspace_id")
-        tenant_id = request.data.get("tenant_id")
-        display_name = str(request.data.get("display_name") or "Jira OAuth").strip()
-
-        try:
-            workspace_id_value = _coerce_optional_int(workspace_id)
-        except (TypeError, ValueError):
-            return error_response(
-                errors={"workspace_id": ["workspace_id must be a valid integer."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
-        try:
-            tenant_id_value = _coerce_optional_int(tenant_id)
-        except (TypeError, ValueError):
-            return error_response(
-                errors={"tenant_id": ["tenant_id must be a valid integer."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
+        service_url = str(payload.get("service_url") or "").strip()
+        workspace_id_value = payload.get("workspace_id")
+        tenant_id_value = payload.get("tenant_id")
+        display_name = str(payload.get("display_name") or "Jira OAuth").strip()
 
         state_token = signing.dumps(
             {
@@ -231,8 +231,20 @@ class JiraOAuthStartView(APIView):
 
 class JiraOAuthExchangeView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = JiraOAuthExchangeRequestSerializer
 
+    @extend_schema(request=JiraOAuthExchangeRequestSerializer)
     def post(self, request):
+        payload_serializer = JiraOAuthExchangeRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+
         token_url = getattr(settings, "JIRA_OAUTH_TOKEN_URL", "")
         resources_url = getattr(settings, "JIRA_OAUTH_ACCESSIBLE_RESOURCES_URL", "")
         client_id = getattr(settings, "JIRA_OAUTH_CLIENT_ID", "")
@@ -252,15 +264,8 @@ class JiraOAuthExchangeView(APIView):
                 request=request,
             )
 
-        code = str(request.data.get("code") or "").strip()
-        state_token = str(request.data.get("state") or "").strip()
-        if not code or not state_token:
-            return error_response(
-                errors={"detail": ["Both code and state are required."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
+        code = str(payload.get("code") or "").strip()
+        state_token = str(payload.get("state") or "").strip()
 
         try:
             state_payload = signing.loads(
@@ -424,8 +429,20 @@ class JiraOAuthExchangeView(APIView):
 
 class JenkinsOAuthStartView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = JenkinsOAuthStartRequestSerializer
 
+    @extend_schema(request=JenkinsOAuthStartRequestSerializer)
     def post(self, request):
+        payload_serializer = JenkinsOAuthStartRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+
         authorize_url = getattr(settings, "JENKINS_OAUTH_AUTHORIZE_URL", "")
         client_id = getattr(settings, "JENKINS_OAUTH_CLIENT_ID", "")
         redirect_uri = getattr(settings, "JENKINS_OAUTH_REDIRECT_URI", "")
@@ -442,37 +459,10 @@ class JenkinsOAuthStartView(APIView):
                 request=request,
             )
 
-        base_url = str(request.data.get("base_url") or "").strip()
-        workspace_id = request.data.get("workspace_id")
-        tenant_id = request.data.get("tenant_id")
-        display_name = str(request.data.get("display_name") or "Jenkins OAuth").strip()
-
-        if not base_url:
-            return error_response(
-                errors={"base_url": ["base_url is required."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
-
-        try:
-            workspace_id_value = int(workspace_id) if workspace_id not in (None, "") else None
-        except (TypeError, ValueError):
-            return error_response(
-                errors={"workspace_id": ["workspace_id must be a valid integer."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
-        try:
-            tenant_id_value = int(tenant_id) if tenant_id not in (None, "") else None
-        except (TypeError, ValueError):
-            return error_response(
-                errors={"tenant_id": ["tenant_id must be a valid integer."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
+        base_url = str(payload.get("base_url") or "").strip()
+        workspace_id_value = payload.get("workspace_id")
+        tenant_id_value = payload.get("tenant_id")
+        display_name = str(payload.get("display_name") or "Jenkins OAuth").strip()
 
         state_token = signing.dumps(
             {
@@ -501,8 +491,20 @@ class JenkinsOAuthStartView(APIView):
 
 class JenkinsOAuthExchangeView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = JenkinsOAuthExchangeRequestSerializer
 
+    @extend_schema(request=JenkinsOAuthExchangeRequestSerializer)
     def post(self, request):
+        payload_serializer = JenkinsOAuthExchangeRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+
         token_url = getattr(settings, "JENKINS_OAUTH_TOKEN_URL", "")
         client_id = getattr(settings, "JENKINS_OAUTH_CLIENT_ID", "")
         client_secret = getattr(settings, "JENKINS_OAUTH_CLIENT_SECRET", "")
@@ -521,15 +523,8 @@ class JenkinsOAuthExchangeView(APIView):
                 request=request,
             )
 
-        code = str(request.data.get("code") or "").strip()
-        state_token = str(request.data.get("state") or "").strip()
-        if not code or not state_token:
-            return error_response(
-                errors={"detail": ["Both code and state are required."]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
+        code = str(payload.get("code") or "").strip()
+        state_token = str(payload.get("state") or "").strip()
 
         try:
             state_payload = signing.loads(
@@ -712,9 +707,18 @@ class ScenarioViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"], url_path="publish")
+    @extend_schema(request=ScenarioPublishRequestSerializer)
     def publish(self, request, pk=None):
         scenario = self.get_object()
-        graph_json = request.data.get("graph_json", scenario.graph_json)
+        payload_serializer = ScenarioPublishRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        graph_json = payload_serializer.validated_data.get("graph_json", scenario.graph_json)
         if not isinstance(graph_json, dict):
             return error_response(
                 errors={"graph_json": ["graph_json must be an object."]},
@@ -860,6 +864,7 @@ class ScenarioViewSet(viewsets.ModelViewSet):
 
 class ScenarioScheduleListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = ScenarioScheduleRequestSerializer
 
     def _get_scenario(self, request, scenario_id):
         queryset = _scope_queryset(
@@ -871,6 +876,7 @@ class ScenarioScheduleListCreateView(APIView):
             return scenario
         return None
 
+    @extend_schema(request=ScenarioScheduleRequestSerializer)
     def post(self, request, scenario_id):
         scenario = self._get_scenario(request, scenario_id)
         if not scenario:
@@ -880,7 +886,15 @@ class ScenarioScheduleListCreateView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
                 request=request,
             )
-        payload = request.data.copy()
+        payload_serializer = ScenarioScheduleRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = dict(payload_serializer.validated_data)
         payload.setdefault(
             "interval_minutes",
             int(
@@ -929,7 +943,9 @@ class ScenarioScheduleListCreateView(APIView):
 
 class ScenarioScheduleDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = ScenarioScheduleRequestSerializer
 
+    @extend_schema(request=ScenarioScheduleRequestSerializer)
     def patch(self, request, scenario_id, schedule_id):
         scenario_queryset = _scope_queryset(
             Scenario.objects.select_related("tenant", "workspace"),
@@ -955,7 +971,23 @@ class ScenarioScheduleDetailView(APIView):
                 request=request,
             )
 
-        serializer = ScenarioScheduleSerializer(schedule, data=request.data, partial=True)
+        payload_serializer = ScenarioScheduleRequestSerializer(
+            data=request.data,
+            partial=True,
+        )
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+
+        serializer = ScenarioScheduleSerializer(
+            schedule,
+            data=payload_serializer.validated_data,
+            partial=True,
+        )
         if not serializer.is_valid():
             return error_response(
                 errors=serializer.errors,
@@ -1282,10 +1314,24 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"], url_path="duplicate")
+    @extend_schema(request=EmailTemplateDuplicateRequestSerializer)
     def duplicate(self, request, pk=None):
         template = self.get_object()
-        tenant_id = request.data.get("tenant_id") or template.tenant_id
-        workspace_id = request.data.get("workspace_id") or template.workspace_id
+        payload_serializer = EmailTemplateDuplicateRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+        tenant_id = payload.get("tenant_id")
+        if tenant_id in (None, ""):
+            tenant_id = template.tenant_id
+        workspace_id = payload.get("workspace_id")
+        if workspace_id in (None, ""):
+            workspace_id = template.workspace_id
         duplicated = duplicate_template(
             template,
             tenant_id=int(tenant_id) if tenant_id not in (None, "") else None,
@@ -1309,6 +1355,7 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"], url_path="preview")
+    @extend_schema(request=EmailTemplatePreviewSerializer)
     def preview(self, request, pk=None):
         template = self.get_object()
         payload_data = request.data.copy()
@@ -1342,6 +1389,7 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
         return success_response(data=preview, request=request)
 
     @action(detail=True, methods=["post"], url_path="test-send")
+    @extend_schema(request=EmailTemplateTestSendSerializer)
     def test_send(self, request, pk=None):
         template = self.get_object()
         payload_data = request.data.copy()
@@ -1395,6 +1443,7 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=False, methods=["post"], url_path="preview")
+    @extend_schema(request=EmailTemplatePreviewSerializer)
     def preview_inline(self, request):
         serializer = EmailTemplatePreviewSerializer(data=request.data)
         if not serializer.is_valid():

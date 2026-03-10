@@ -1,6 +1,7 @@
 """Customer and user management views."""
 
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -20,6 +21,7 @@ from ..models import (
     UserTypeChoices,
 )
 
+from ..openapi_serializers import EmptySerializer, RoleIdsRequestSerializer
 from ..permissions import user_can_manage_customer, user_can_manage_tenant
 from ..serializers import (
     CustomerSerializer,
@@ -168,6 +170,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
 class CustomerUserView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = UserInviteSerializer
 
     def _apply_user_search_filter(self, queryset, request, customer_id):
         search = request.query_params.get("search", None)
@@ -229,6 +232,7 @@ class CustomerUserView(APIView):
             request=request,
         )
 
+    @extend_schema(request=UserInviteSerializer)
     def post(self, request, customer_id):
         customer = Customer.objects.filter(id=customer_id).first()
         if not customer:
@@ -285,6 +289,7 @@ class CustomerUserView(APIView):
 
 class CustomerUserDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = TenantUserUpdateSerializer
 
     def get(self, request, customer_id, user_id):
         customer = Customer.objects.filter(id=customer_id).first()
@@ -322,6 +327,7 @@ class CustomerUserDetailView(APIView):
             )
         return success_response(data=UserSerializer(user).data, request=request)
 
+    @extend_schema(request=TenantUserUpdateSerializer)
     def patch(self, request, customer_id, user_id):
         customer = Customer.objects.filter(id=customer_id).first()
         if not customer:
@@ -436,6 +442,7 @@ class CustomerUserDetailView(APIView):
 
 class CustomerRoleListView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = EmptySerializer
 
     def get(self, request, customer_id):
         customer = Customer.objects.filter(id=customer_id).first()
@@ -462,7 +469,9 @@ class CustomerRoleListView(APIView):
 
 class CustomerUserRoleAssignView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = RoleIdsRequestSerializer
 
+    @extend_schema(request=RoleIdsRequestSerializer)
     def post(self, request, customer_id, user_id):
         customer = Customer.objects.filter(id=customer_id).first()
         if not customer:
@@ -489,21 +498,15 @@ class CustomerUserRoleAssignView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
                 request=request,
             )
-        role_ids = request.data.get("role_ids", None)
-        if role_ids is None:
+        payload_serializer = RoleIdsRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
             return error_response(
-                errors={"role_ids": ["role_ids is required"]},
+                errors=payload_serializer.errors,
                 message="Invalid payload",
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
-        if not isinstance(role_ids, list):
-            return error_response(
-                errors={"role_ids": ["role_ids must be a list"]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
+        role_ids = payload_serializer.validated_data["role_ids"]
         user = User.objects.filter(id=user_id).first()
         if not user:
             return error_response(

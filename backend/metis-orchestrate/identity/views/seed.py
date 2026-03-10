@@ -10,6 +10,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
 from common_utils.api.responses import error_response, success_response
+from ..openapi_serializers import EmptySerializer
 
 
 def _seed_endpoint_enabled():
@@ -20,6 +21,7 @@ def _seed_endpoint_enabled():
 
 class SeedIdentityView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = EmptySerializer
 
     def post(self, request):
         if not _seed_endpoint_enabled():

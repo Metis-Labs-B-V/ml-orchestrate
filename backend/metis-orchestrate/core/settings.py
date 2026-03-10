@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "rest_framework",
+    "drf_spectacular",
     "rest_framework_simplejwt.token_blacklist",
     "app",
     "identity",
@@ -169,6 +170,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "identity.authentication.JWEJWTAuthentication",
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
@@ -178,6 +180,13 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "common_utils.api.pagination.StandardPageNumberPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "common_utils.api.exceptions.standard_exception_handler",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Metis Orchestrate API",
+    "DESCRIPTION": "OpenAPI schema for identity and orchestrate backend endpoints.",
+    "VERSION": "1.0.0",
+    "SCHEMA_PATH_PREFIX": rf"/{API_PREFIX}|/{SERVICE_BASE_PATH}",
 }
 
 SIMPLE_JWT = {

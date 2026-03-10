@@ -1,5 +1,6 @@
 """Role and permission CRUD."""
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -67,6 +68,7 @@ class RoleViewSet(viewsets.ModelViewSet):
         return super().perform_destroy(instance)
 
     @action(detail=True, methods=["get", "post"])
+    @extend_schema(request=RolePermissionAssignSerializer)
     def permissions(self, request, pk=None):
         role = self.get_object()
         if request.method == "GET":

@@ -1,6 +1,7 @@
 """Tenant and user management views."""
 
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -18,6 +19,7 @@ from ..models import (
     UserTypeChoices
 )
 
+from ..openapi_serializers import EmptySerializer, RoleIdsRequestSerializer
 from ..permissions import (
     IsSuperAdmin,
     ROLE_READ_CODES,
@@ -92,6 +94,7 @@ class TenantViewSet(viewsets.ModelViewSet):
 
 class TenantUserView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = UserInviteSerializer
 
     def _apply_user_search_filter(self, queryset, request):
         search = request.query_params.get("search", None)
@@ -141,6 +144,7 @@ class TenantUserView(APIView):
             request=request,
         )
 
+    @extend_schema(request=UserInviteSerializer)
     def post(self, request, tenant_id):
         if not user_has_permissions(request.user, USER_WRITE_CODES, tenant_id=tenant_id):
             return error_response(
@@ -212,6 +216,7 @@ class TenantUserView(APIView):
 
 class TenantUserDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = TenantUserUpdateSerializer
 
     def get(self, request, tenant_id, user_id):
         if not user_has_permissions(request.user, USER_READ_CODES, tenant_id=tenant_id):
@@ -241,6 +246,7 @@ class TenantUserDetailView(APIView):
             )
         return success_response(data=UserSerializer(user).data, request=request)
 
+    @extend_schema(request=TenantUserUpdateSerializer)
     def patch(self, request, tenant_id, user_id):
         if not user_has_permissions(request.user, USER_WRITE_CODES, tenant_id=tenant_id):
             return error_response(
@@ -341,6 +347,7 @@ class TenantUserDetailView(APIView):
 
 class TenantRoleListView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = EmptySerializer
 
     def get(self, request, tenant_id):
         if not user_has_permissions(request.user, ROLE_READ_CODES, tenant_id=tenant_id):
@@ -359,7 +366,9 @@ class TenantRoleListView(APIView):
 
 class UserRoleAssignView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = RoleIdsRequestSerializer
 
+    @extend_schema(request=RoleIdsRequestSerializer)
     def post(self, request, tenant_id, user_id):
         if not user_has_permissions(request.user, ROLE_WRITE_CODES, tenant_id=tenant_id):
             return error_response(
@@ -376,21 +385,15 @@ class UserRoleAssignView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
                 request=request,
             )
-        role_ids = request.data.get("role_ids", None)
-        if role_ids is None:
+        payload_serializer = RoleIdsRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
             return error_response(
-                errors={"role_ids": ["role_ids is required"]},
+                errors=payload_serializer.errors,
                 message="Invalid payload",
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
-        if not isinstance(role_ids, list):
-            return error_response(
-                errors={"role_ids": ["role_ids must be a list"]},
-                message="Invalid payload",
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
+        role_ids = payload_serializer.validated_data["role_ids"]
         tenant = Tenant.objects.filter(id=tenant_id).first()
         if not tenant:
             return error_response(

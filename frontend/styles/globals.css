@@ -3103,6 +3103,13 @@ code {
   color: #111827;
 }
 
+.email-template-preview-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .email-template-preview-section {
   display: grid;
   gap: 8px;
@@ -3137,6 +3144,17 @@ code {
   gap: 6px;
   font-size: 12px;
   color: #6b7280;
+}
+
+.email-template-test-send-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.email-template-test-send-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .email-template-version-list {
@@ -5212,6 +5230,15 @@ code {
   }
 
   .email-templates-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .email-template-preview-card-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .email-template-test-send-grid {
     grid-template-columns: 1fr;
   }
 }

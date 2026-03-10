@@ -60,6 +60,13 @@ python manage.py migrate
 python manage.py runserver 127.0.0.1:8001
 ```
 
+## OpenAPI / Swagger
+
+After starting the backend server:
+
+- OpenAPI schema: `http://127.0.0.1:8001/api/v1/schema/`
+- Swagger UI: `http://127.0.0.1:8001/api/v1/swagger/`
+
 Optional async worker processes (for queued scenario runs and schedule polling):
 
 ```bash

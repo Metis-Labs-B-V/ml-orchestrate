@@ -2,6 +2,7 @@
 
 import pyotp
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
@@ -11,14 +12,19 @@ from common_utils.api.responses import error_response, success_response
 from ..activity_log import log_activity
 from ..jwe import decrypt_token, encrypt_token
 from ..models import User
+from ..openapi_serializers import EmptySerializer, ToggleEnabledRequestSerializer
 from ..serializers import MfaSetupSerializer, MfaVerifyLoginSerializer, UserSerializer
 
 
 class MfaToggleView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = ToggleEnabledRequestSerializer
 
+    @extend_schema(request=ToggleEnabledRequestSerializer)
     def post(self, request):
-        enabled = bool(request.data.get("enabled", False))
+        serializer = ToggleEnabledRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        enabled = serializer.validated_data["enabled"]
         previous = bool(request.user.mfa_enabled)
         request.user.mfa_enabled = enabled
         request.user.save(update_fields=["mfa_enabled"])
@@ -44,6 +50,7 @@ class MfaToggleView(APIView):
 
 class MfaSetupView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = EmptySerializer
 
     def post(self, request):
         secret = pyotp.random_base32()
@@ -71,7 +78,9 @@ class MfaSetupView(APIView):
 
 class MfaConfirmView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = MfaSetupSerializer
 
+    @extend_schema(request=MfaSetupSerializer)
     def post(self, request):
         serializer = MfaSetupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -116,7 +125,9 @@ class MfaConfirmView(APIView):
 
 class MfaDisableView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = MfaSetupSerializer
 
+    @extend_schema(request=MfaSetupSerializer)
     def post(self, request):
         serializer = MfaSetupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -162,7 +173,9 @@ class MfaDisableView(APIView):
 
 class MfaVerifyLoginView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = MfaVerifyLoginSerializer
 
+    @extend_schema(request=MfaVerifyLoginSerializer)
     def post(self, request):
         serializer = MfaVerifyLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

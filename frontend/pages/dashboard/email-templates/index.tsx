@@ -7,8 +7,10 @@ import {
   deleteEmailTemplate,
   duplicateEmailTemplate,
   listEmailTemplates,
+  listConnections,
   listEmailTemplateVersions,
   previewEmailTemplate,
+  testSendEmailTemplate,
   updateEmailTemplate,
 } from "../../../lib/scenariosApi";
 import type {
@@ -19,6 +21,7 @@ import type {
   EmailTemplateVariableSchema,
   EmailTemplateVersionRecord,
 } from "../../../types/emailTemplates";
+import type { ConnectionRecord } from "../../../types/scenarios";
 import type { DashboardPage } from "../../../types/dashboard";
 
 const CATEGORY_OPTIONS: Array<{ value: EmailTemplateCategory; label: string }> = [
@@ -43,6 +46,14 @@ type TemplateFormState = {
   is_system_template: boolean;
 };
 
+type TestSendFormState = {
+  connectionId: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  replyTo: string;
+};
+
 const EMPTY_FORM: TemplateFormState = {
   id: null,
   name: "",
@@ -55,6 +66,14 @@ const EMPTY_FORM: TemplateFormState = {
   variables_schema_text: "[]",
   sample_payload_text: "{}",
   is_system_template: false,
+};
+
+const EMPTY_TEST_SEND_FORM: TestSendFormState = {
+  connectionId: "",
+  to: "",
+  cc: "",
+  bcc: "",
+  replyTo: "",
 };
 
 const safeJsonStringify = (value: unknown, fallback: string) => {
@@ -109,6 +128,12 @@ const parseJsonArray = (value: string, fieldName: string) => {
   }
 };
 
+const parseCommaSeparatedList = (value: string): string[] =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
 const EmailTemplatesPage: DashboardPage = () => {
   const [templates, setTemplates] = useState<EmailTemplateRecord[]>([]);
   const [versions, setVersions] = useState<EmailTemplateVersionRecord[]>([]);
@@ -124,6 +149,10 @@ const EmailTemplatesPage: DashboardPage = () => {
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [preview, setPreview] = useState<EmailTemplatePreviewResult | null>(null);
+  const [emailConnections, setEmailConnections] = useState<ConnectionRecord[]>([]);
+  const [isConnectionsLoading, setIsConnectionsLoading] = useState(false);
+  const [testSendForm, setTestSendForm] = useState<TestSendFormState>(EMPTY_TEST_SEND_FORM);
+  const [isTestSending, setIsTestSending] = useState(false);
 
   const selectedTemplate = useMemo(
     () => templates.find((item) => item.id === selectedTemplateId) || null,
@@ -166,17 +195,61 @@ const EmailTemplatesPage: DashboardPage = () => {
   useEffect(() => {
     if (!selectedTemplate) {
       setVersions([]);
+      setEmailConnections([]);
+      setTestSendForm(EMPTY_TEST_SEND_FORM);
       return;
     }
     setForm(formFromTemplate(selectedTemplate));
     void loadVersions(selectedTemplate.id);
   }, [loadVersions, selectedTemplate]);
 
+  const loadEmailConnections = useCallback(async () => {
+    if (!selectedTemplate) {
+      setEmailConnections([]);
+      setTestSendForm((previous) => ({ ...previous, connectionId: "" }));
+      return;
+    }
+    setIsConnectionsLoading(true);
+    try {
+      const payload = await listConnections({
+        provider: "email",
+        tenantId: selectedTemplate.tenant_id,
+        workspaceId: selectedTemplate.workspace_id ?? undefined,
+      });
+      const items = payload.items || [];
+      setEmailConnections(items);
+      setTestSendForm((previous) => ({
+        ...previous,
+        connectionId: items.some((item) => String(item.id) === previous.connectionId)
+          ? previous.connectionId
+          : "",
+      }));
+    } catch (connectionError) {
+      setEmailConnections([]);
+      setError(
+        connectionError instanceof Error
+          ? connectionError.message
+          : "Unable to load email connections."
+      );
+    } finally {
+      setIsConnectionsLoading(false);
+    }
+  }, [selectedTemplate]);
+
+  useEffect(() => {
+    if (!selectedTemplate) {
+      return;
+    }
+    void loadEmailConnections();
+  }, [loadEmailConnections, selectedTemplate]);
+
   const resetEditor = () => {
     setSelectedTemplateId(null);
     setForm(EMPTY_FORM);
     setPreview(null);
     setVersions([]);
+    setEmailConnections([]);
+    setTestSendForm(EMPTY_TEST_SEND_FORM);
     setError("");
     setStatusMessage("");
   };
@@ -312,6 +385,47 @@ const EmailTemplatesPage: DashboardPage = () => {
     }));
     setStatusMessage(`Imported HTML from ${file.name}.`);
     event.target.value = "";
+  };
+
+  const handleTestSend = async () => {
+    if (!selectedTemplate) {
+      setError("Save or select an existing template before sending a test email.");
+      return;
+    }
+    if (!testSendForm.connectionId.trim()) {
+      setError("Select an email connection for test send.");
+      return;
+    }
+    const toRecipients = parseCommaSeparatedList(testSendForm.to);
+    if (!toRecipients.length) {
+      setError("Add at least one recipient in To.");
+      return;
+    }
+    const parsedSample = parseJsonObject(form.sample_payload_text, "Sample payload");
+    if (parsedSample.error) {
+      setError(parsedSample.error);
+      return;
+    }
+    setIsTestSending(true);
+    setError("");
+    try {
+      await testSendEmailTemplate({
+        templateId: selectedTemplate.id,
+        data: {
+          connection_id: Number(testSendForm.connectionId),
+          to: toRecipients,
+          cc: parseCommaSeparatedList(testSendForm.cc),
+          bcc: parseCommaSeparatedList(testSendForm.bcc),
+          reply_to: testSendForm.replyTo.trim(),
+          payload: parsedSample.value,
+        },
+      });
+      setStatusMessage("Test email sent.");
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "Unable to send test email.");
+    } finally {
+      setIsTestSending(false);
+    }
   };
 
   const templateCountLabel = isLoading ? "Loading..." : `${templates.length} templates`;
@@ -608,6 +722,119 @@ const EmailTemplatesPage: DashboardPage = () => {
                   Generate a preview to inspect rendered subject and body.
                 </p>
               )}
+            </section>
+
+            <section className="email-template-preview-card">
+              <div className="email-template-preview-card-header">
+                <h4>Test send</h4>
+                <MLButton
+                  type="button"
+                  variant="outline"
+                  onClick={loadEmailConnections}
+                  disabled={!selectedTemplate || isConnectionsLoading}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh connections
+                </MLButton>
+              </div>
+              <div className="email-template-test-send-grid">
+                <label className="email-template-field email-template-field--full">
+                  <span>Connection</span>
+                  <select
+                    className="scenario-config-select"
+                    value={testSendForm.connectionId}
+                    disabled={!selectedTemplate || isConnectionsLoading}
+                    onChange={(event) =>
+                      setTestSendForm((previous) => ({
+                        ...previous,
+                        connectionId: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Select email connection</option>
+                    {emailConnections.map((connection) => (
+                      <option key={connection.id} value={String(connection.id)}>
+                        {connection.display_name} (#{connection.id})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="email-template-field">
+                  <span>To</span>
+                  <input
+                    className="scenario-config-input"
+                    value={testSendForm.to}
+                    onChange={(event) =>
+                      setTestSendForm((previous) => ({
+                        ...previous,
+                        to: event.target.value,
+                      }))
+                    }
+                    placeholder="user@example.com, ops@example.com"
+                  />
+                </label>
+                <label className="email-template-field">
+                  <span>CC</span>
+                  <input
+                    className="scenario-config-input"
+                    value={testSendForm.cc}
+                    onChange={(event) =>
+                      setTestSendForm((previous) => ({
+                        ...previous,
+                        cc: event.target.value,
+                      }))
+                    }
+                    placeholder="team@example.com"
+                  />
+                </label>
+                <label className="email-template-field">
+                  <span>BCC</span>
+                  <input
+                    className="scenario-config-input"
+                    value={testSendForm.bcc}
+                    onChange={(event) =>
+                      setTestSendForm((previous) => ({
+                        ...previous,
+                        bcc: event.target.value,
+                      }))
+                    }
+                    placeholder="audit@example.com"
+                  />
+                </label>
+                <label className="email-template-field">
+                  <span>Reply-to</span>
+                  <input
+                    className="scenario-config-input"
+                    value={testSendForm.replyTo}
+                    onChange={(event) =>
+                      setTestSendForm((previous) => ({
+                        ...previous,
+                        replyTo: event.target.value,
+                      }))
+                    }
+                    placeholder="support@example.com"
+                  />
+                </label>
+              </div>
+              <div className="email-template-test-send-actions">
+                <MLButton
+                  type="button"
+                  variant="outline"
+                  onClick={handleTestSend}
+                  disabled={
+                    !selectedTemplate ||
+                    !testSendForm.connectionId.trim() ||
+                    isTestSending
+                  }
+                >
+                  Test send
+                </MLButton>
+              </div>
+              {!isConnectionsLoading && selectedTemplate && !emailConnections.length ? (
+                <p className="email-templates-empty">
+                  No active email connections found. Create one in the scenario editor.
+                </p>
+              ) : null}
             </section>
 
             <section className="email-template-preview-card">

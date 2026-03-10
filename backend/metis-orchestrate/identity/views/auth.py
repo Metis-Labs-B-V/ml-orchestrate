@@ -11,6 +11,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
@@ -21,6 +22,16 @@ from common_utils.api.responses import error_response, success_response
 from ..activity_log import collect_changes, log_activity
 from common_utils.email import reset_password_email, send_email
 from ..jwe import decrypt_token, encrypt_token
+from ..openapi_serializers import (
+    ChangePasswordRequestSerializer,
+    LoginRequestSerializer,
+    LogoutRequestSerializer,
+    OnboardCustomerRequestSerializer,
+    OnboardTenantRequestSerializer,
+    RefreshRequestSerializer,
+    TokenPayloadRequestSerializer,
+    VerifyLoginOtpRequestSerializer,
+)
 from ..permissions import HasAdminAccess, IsSuperAdmin, user_can_manage_tenant
 from identity.utils import create_roles_and_permissions_for_customer
 
@@ -69,10 +80,21 @@ from identity.utils import (
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = LoginRequestSerializer
 
+    @extend_schema(request=LoginRequestSerializer)
     def post(self, request):
+        payload_serializer = LoginRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
 
-        email, is_email_valid, email_error = tenant_login_email_validations(request.data.get("email"))
+        email, is_email_valid, email_error = tenant_login_email_validations(payload.get("email"))
         print("is_email_valid ", is_email_valid)
         if not is_email_valid:
             return error_response(
@@ -82,7 +104,11 @@ class LoginView(APIView):
                 request=request,
             )
         
-        password, is_password_valid, password_error = tenant_login_password_validations(request.data.get("email"), request.data.get("password"), request.data.get("password"))
+        password, is_password_valid, password_error = tenant_login_password_validations(
+            payload.get("email"),
+            payload.get("password"),
+            payload.get("password"),
+        )
         if not is_password_valid:
             return error_response(
                 errors={"password": [password_error]},
@@ -90,12 +116,10 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
-        
-        request.data["email"] = email
-        request.data["password"] = password
+
         user = User.objects.filter(email=email).first()
 
-        if not user.check_password(password):
+        if not user or not user.check_password(password):
             return error_response(
                 errors={"password": ["Incorrect email or password."]},
                 message="Incorrect email or password.",
@@ -103,7 +127,10 @@ class LoginView(APIView):
                 request=request,
             )
 
-        serializer = LoginSerializer(data=request.data, context={"request": request})
+        serializer = LoginSerializer(
+            data={"email": email, "password": password},
+            context={"request": request},
+        )
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data["user"]
         user.last_login = timezone.now()
@@ -153,12 +180,20 @@ class LoginView(APIView):
 
 class RefreshView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = RefreshRequestSerializer
 
+    @extend_schema(request=RefreshRequestSerializer)
     def post(self, request):
-        payload = request.data.copy()
-        refresh_token = payload.get("refresh")
-        if refresh_token:
-            payload["refresh"] = decrypt_token(refresh_token)
+        payload_serializer = RefreshRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data.copy()
+        payload["refresh"] = decrypt_token(payload["refresh"])
         serializer = TokenRefreshSerializer(data=payload)
         if not serializer.is_valid():
             return error_response(
@@ -177,20 +212,22 @@ class RefreshView(APIView):
 
 class TokenPayloadView(APIView):
     permission_classes = [IsAuthenticated, HasAdminAccess]
+    serializer_class = TokenPayloadRequestSerializer
 
+    @extend_schema(request=TokenPayloadRequestSerializer)
     def post(self, request):
-        token = (
-            request.data.get("token")
-            or request.data.get("access")
-            or request.data.get("refresh")
-        )
-        if not token:
+        payload_serializer = TokenPayloadRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
             return error_response(
-                errors={"token": ["Token is required"]},
+                errors=payload_serializer.errors,
                 message="Invalid payload",
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
+        payload_data = payload_serializer.validated_data
+        token = payload_data.get("token") or payload_data.get("access") or payload_data.get(
+            "refresh"
+        )
         try:
             jwt = decrypt_token(token)
             payload_b64 = jwt.split(".")[1]
@@ -208,16 +245,19 @@ class TokenPayloadView(APIView):
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = LogoutRequestSerializer
 
+    @extend_schema(request=LogoutRequestSerializer)
     def post(self, request):
-        refresh_token = request.data.get("refresh")
-        if not refresh_token:
+        payload_serializer = LogoutRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
             return error_response(
-                errors={"refresh": ["Refresh token required"]},
-                message="Refresh token required",
+                errors=payload_serializer.errors,
+                message="Invalid payload",
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
+        refresh_token = payload_serializer.validated_data["refresh"]
         refresh_token = decrypt_token(refresh_token)
         try:
             refresh = RefreshToken(refresh_token)
@@ -243,10 +283,12 @@ class LogoutView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = UserUpdateSerializer
 
     def get(self, request):
         return success_response(data=UserSerializer(request.user).data, request=request)
 
+    @extend_schema(request=UserUpdateSerializer)
     def patch(self, request):
         serializer = UserUpdateSerializer(
             instance=request.user, data=request.data, partial=True
@@ -276,11 +318,30 @@ class MeView(APIView):
 
 class OnboardTenantView(APIView):
     permission_classes = [IsAuthenticated, IsSuperAdmin]
+    serializer_class = OnboardTenantRequestSerializer
 
     @transaction.atomic
+    @extend_schema(request=OnboardTenantRequestSerializer)
     def post(self, request):
-        tenant_data = request.data.get("tenant")
-        owner_data = request.data.get("owner")
+        payload_serializer = OnboardTenantRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+        tenant_data = dict(payload.get("tenant") or {})
+        owner_data = dict(payload.get("owner") or {})
+
+        if not tenant_data or not owner_data:
+            return error_response(
+                errors={"detail": "tenant and owner data required"},
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
 
         owner_data["email"], is_email_valid, error = tenant_signup_email_validations(owner_data.get("email"))
         
@@ -298,15 +359,6 @@ class OnboardTenantView(APIView):
             return error_response(
                 errors={"password": [error]},
                 message=error,
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
-
-
-        if not tenant_data or not owner_data:
-            return error_response(
-                errors={"detail": "tenant and owner data required"},
-                message="Invalid payload",
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
@@ -394,13 +446,24 @@ class OnboardTenantView(APIView):
 
 class OnboardCustomerView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = OnboardCustomerRequestSerializer
 
     @transaction.atomic
+    @extend_schema(request=OnboardCustomerRequestSerializer)
     def post(self, request):
-        customer_data = request.data.get("customer")
-        owner_data = request.data.get("owner")
+        payload_serializer = OnboardCustomerRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+        customer_data = dict(payload.get("customer") or {})
+        owner_data = dict(payload.get("owner") or {})
         tenant_id = (
-            request.data.get("tenant_id")
+            payload.get("tenant_id")
             or (customer_data or {}).get("tenant_id")
             or (customer_data or {}).get("tenant")
         )
@@ -445,19 +508,19 @@ class OnboardCustomerView(APIView):
                 request=request,
             )
 
+        if not customer_data or not owner_data:
+            return error_response(
+                errors={"detail": "customer and owner data required"},
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+
         owner_data["email"], is_email_valid, error = tenant_signup_email_validations(owner_data.get("email"))
         if not is_email_valid:
             return error_response(
                 errors={"email": [error]},
                 message=error,
-                status=status.HTTP_400_BAD_REQUEST,
-                request=request,
-            )
-
-        if not customer_data or not owner_data:
-            return error_response(
-                errors={"detail": "customer and owner data required"},
-                message="Invalid payload",
                 status=status.HTTP_400_BAD_REQUEST,
                 request=request,
             )
@@ -534,8 +597,10 @@ class OnboardCustomerView(APIView):
 
 class CreateCustomerView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = CustomerSerializer
 
     @transaction.atomic
+    @extend_schema(request=CustomerSerializer)
     def post(self, request):
         customer_data = request.data
 
@@ -604,7 +669,9 @@ class CreateCustomerView(APIView):
 
 class SignupView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = SignupSerializer
 
+    @extend_schema(request=SignupSerializer)
     def post(self, request):
         serializer = SignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -631,7 +698,9 @@ class SignupView(APIView):
 
 class ForgotPasswordView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = ForgotPasswordSerializer
 
+    @extend_schema(request=ForgotPasswordSerializer)
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -673,9 +742,20 @@ class ForgotPasswordView(APIView):
 
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = ResetPasswordSerializer
 
+    @extend_schema(request=ResetPasswordSerializer)
     def post(self, request):
-        token = request.data.get("token")
+        payload_serializer = ResetPasswordSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
+        token = payload.get("token")
         reset_token = PasswordResetToken.objects.filter(token=token).first()
 
         if not reset_token :
@@ -695,7 +775,11 @@ class ResetPasswordView(APIView):
             )
 
         user = reset_token.user
-        password, is_valid, error = tenant_signup_password_validations(user.email, request.data.get("password"), request.data.get("password"))
+        password, is_valid, error = tenant_signup_password_validations(
+            user.email,
+            payload.get("password"),
+            payload.get("password"),
+        )
         
         if not is_valid:
             return error_response(
@@ -725,10 +809,21 @@ class ResetPasswordView(APIView):
 
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = ChangePasswordRequestSerializer
 
+    @extend_schema(request=ChangePasswordRequestSerializer)
     def post(self, request):
+        payload_serializer = ChangePasswordRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
         user = request.user
-        current_password = request.data.get("current_password")
+        current_password = payload.get("current_password")
         
         if not user.check_password(current_password):
             return error_response(
@@ -738,7 +833,11 @@ class ChangePasswordView(APIView):
                 request=request,
             )
         
-        new_password, is_valid, error = tenant_signup_password_validations(user.email, request.data.get("new_password"), request.data.get("new_password"))
+        new_password, is_valid, error = tenant_signup_password_validations(
+            user.email,
+            payload.get("new_password"),
+            payload.get("new_password"),
+        )
         if not is_valid:
             return error_response(
                 errors={"new_password": [error]},
@@ -764,6 +863,7 @@ class ChangePasswordView(APIView):
 
 class VerifyTenantEmailView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = VerifyEmailSerializer
 
 
     def _validate_token(self, token):
@@ -773,6 +873,7 @@ class VerifyTenantEmailView(APIView):
             return None, "Token cannot be empty."
         return token, None
 
+    @extend_schema(request=VerifyEmailSerializer)
     def post(self, request):
 
         token, token_error = self._validate_token(request.data.get("token"))
@@ -832,12 +933,23 @@ class VerifyTenantEmailView(APIView):
 
 class VerifyLoginOTPView(APIView):
     permission_classes = [AllowAny]
+    serializer_class = VerifyLoginOtpRequestSerializer
 
+    @extend_schema(request=VerifyLoginOtpRequestSerializer)
     def post(self, request):
+        payload_serializer = VerifyLoginOtpRequestSerializer(data=request.data)
+        if not payload_serializer.is_valid():
+            return error_response(
+                errors=payload_serializer.errors,
+                message="Invalid payload",
+                status=status.HTTP_400_BAD_REQUEST,
+                request=request,
+            )
+        payload = payload_serializer.validated_data
 
-        email = request.data.get("email", "")
-        password = request.data.get("password", "")
-        otp = request.data.get("otp", "")
+        email = payload.get("email", "")
+        password = payload.get("password", "")
+        otp = payload.get("otp", "")
 
         if not otp:
             return error_response(

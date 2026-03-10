@@ -1,6 +1,7 @@
 """Impersonation and audit trail views."""
 
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -10,12 +11,14 @@ from common_utils.api.responses import error_response, success_response
 from ..activity_log import get_active_tenant_ids, log_activity
 from ..jwe import encrypt_token
 from ..models import ImpersonationLog, User, UserTenant
+from ..openapi_serializers import EmptySerializer, ImpersonateUserRequestSerializer
 from ..permissions import HasAuditReadAccess
 from ..serializers import ImpersonationLogSerializer, UserListSerializer, UserSerializer
 
 
 class ImpersonationUserListView(APIView):
     permission_classes = [IsAuthenticated, HasAuditReadAccess]
+    serializer_class = EmptySerializer
 
     def get(self, request):
         if request.user.is_superuser:
@@ -39,16 +42,19 @@ class ImpersonationUserListView(APIView):
 
 class ImpersonateUserView(APIView):
     permission_classes = [IsAuthenticated, HasAuditReadAccess]
+    serializer_class = ImpersonateUserRequestSerializer
 
+    @extend_schema(request=ImpersonateUserRequestSerializer)
     def post(self, request):
-        user_id = request.data.get("user_id")
-        if not user_id:
+        serializer = ImpersonateUserRequestSerializer(data=request.data)
+        if not serializer.is_valid():
             return error_response(
-                errors={"user_id": ["user_id is required"]},
+                errors=serializer.errors,
                 message="Invalid payload",
                 request=request,
                 status=400,
             )
+        user_id = serializer.validated_data["user_id"]
         target_user = User.objects.filter(id=user_id, is_active=True).first()
         if not target_user:
             return error_response(

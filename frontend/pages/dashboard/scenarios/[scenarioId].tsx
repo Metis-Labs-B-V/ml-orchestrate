@@ -32,6 +32,7 @@ import NodeContextMenu, {
   type ContextMenuState,
 } from "../../../components/scenarios/NodeContextMenu";
 import ScenarioHistoryExplorer from "../../../components/scenarios/ScenarioHistoryExplorer";
+import EmailConnectionModal from "../../../components/scenarios/EmailConnectionModal";
 import {
   createApiTokenConnection,
   startJiraOauth,
@@ -157,10 +158,15 @@ type JsonFieldMapping = {
   customValue: string;
 };
 
-type JsonTokenOption = {
+type JsonTokenOptionBase = {
   token: string;
   label: string;
   nodeId: string;
+};
+
+type JsonTokenOption = JsonTokenOptionBase & {
+  provider: NodeProvider;
+  scope: "upstream" | "other";
 };
 
 type EmailComposeMode = "inline" | "template";
@@ -199,6 +205,115 @@ type NodeContextActionId =
   | "delete-module";
 
 type RunStepView = Record<string, unknown>;
+
+type VariableTokenPickerProps = {
+  className?: string;
+  idPrefix?: string;
+  includeOtherNodes?: boolean;
+  onChange: (value: string) => void;
+  options: JsonTokenOption[];
+  placeholder?: string;
+  value: string;
+};
+
+const VariableTokenPicker = ({
+  className = "scenario-config-select",
+  idPrefix = "token",
+  includeOtherNodes = true,
+  onChange,
+  options,
+  placeholder = "Select prior node output",
+  value,
+}: VariableTokenPickerProps) => {
+  const visibleOptions = includeOtherNodes
+    ? options
+    : options.filter((option) => option.scope !== "other");
+  const hasCurrentValue = value
+    ? visibleOptions.some((option) => option.token === value)
+    : false;
+  const upstreamOptions = visibleOptions.filter((option) => option.scope !== "other");
+  const otherOptions = visibleOptions.filter((option) => option.scope === "other");
+
+  return (
+    <select
+      className={className}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{placeholder}</option>
+      {value && !hasCurrentValue ? <option value={value}>{value}</option> : null}
+      {upstreamOptions.map((option) => (
+        <option key={`${idPrefix}-${option.token}`} value={option.token}>
+          {option.label}
+        </option>
+      ))}
+      {otherOptions.length ? (
+        <optgroup label="Other helper nodes">
+          {otherOptions.map((option) => (
+            <option key={`${idPrefix}-${option.token}`} value={option.token}>
+              {option.label}
+            </option>
+          ))}
+        </optgroup>
+      ) : null}
+    </select>
+  );
+};
+
+type MappedSourceControlProps = {
+  customPlaceholder: string;
+  customValue: string;
+  onCustomValueChange: (value: string) => void;
+  onSourceTypeChange: (value: "mapped" | "custom") => void;
+  onSourceTokenChange: (value: string) => void;
+  sourceToken: string;
+  sourceType: "mapped" | "custom";
+  tokenOptions: JsonTokenOption[];
+  tokenPickerIdPrefix: string;
+  tokenPickerPlaceholder?: string;
+};
+
+const MappedSourceControl = ({
+  customPlaceholder,
+  customValue,
+  onCustomValueChange,
+  onSourceTypeChange,
+  onSourceTokenChange,
+  sourceToken,
+  sourceType,
+  tokenOptions,
+  tokenPickerIdPrefix,
+  tokenPickerPlaceholder = "Select prior node output",
+}: MappedSourceControlProps) => (
+  <>
+    <select
+      className="scenario-config-select"
+      value={sourceType}
+      onChange={(event) =>
+        onSourceTypeChange(event.target.value === "custom" ? "custom" : "mapped")
+      }
+    >
+      <option value="mapped">Mapped value</option>
+      <option value="custom">Custom value</option>
+    </select>
+    {sourceType === "mapped" ? (
+      <VariableTokenPicker
+        idPrefix={tokenPickerIdPrefix}
+        options={tokenOptions}
+        placeholder={tokenPickerPlaceholder}
+        value={sourceToken}
+        onChange={onSourceTokenChange}
+      />
+    ) : (
+      <input
+        className="scenario-config-input"
+        value={customValue}
+        onChange={(event) => onCustomValueChange(event.target.value)}
+        placeholder={customPlaceholder}
+      />
+    )}
+  </>
+);
 
 const getScenarioIdFromPath = (pathname: string) => pathname.split("/").pop() || "";
 
@@ -362,12 +477,12 @@ const flattenJsonPaths = (
   basePath: string,
   depth = 0,
   limit = 120
-): JsonTokenOption[] => {
+): JsonTokenOptionBase[] => {
   if (depth > 4 || limit <= 0) {
     return [];
   }
 
-  const options: JsonTokenOption[] = [];
+  const options: JsonTokenOptionBase[] = [];
   if (Array.isArray(value)) {
     const max = Math.min(value.length, 10);
     for (let index = 0; index < max; index += 1) {
@@ -1277,6 +1392,7 @@ const ScenarioCanvasPage: DashboardPage = () => {
   const [isConnectionModalOpen, setIsConnectionModalOpen] = useState(false);
   const [connectionModalError, setConnectionModalError] = useState("");
   const [connectionModalStatus, setConnectionModalStatus] = useState("");
+  const [isEmailConnectionModalOpen, setIsEmailConnectionModalOpen] = useState(false);
   const [isCreatingConnection, setIsCreatingConnection] = useState(false);
   const [jiraConnectionAuthMode, setJiraConnectionAuthMode] = useState<"apiToken" | "oauth">(
     "oauth"
@@ -1691,9 +1807,21 @@ const ScenarioCanvasPage: DashboardPage = () => {
 
   const jsonMappingTokenOptions = useMemo(() => {
     const options: JsonTokenOption[] = [];
-    const appendOptionsFromNode = (nodeId: string, labelSuffix = "") => {
+    const appendOptionsFromNode = (
+      nodeId: string,
+      labelSuffix = "",
+      scope: JsonTokenOption["scope"] = "upstream"
+    ) => {
+      const node = nodeById.get(nodeId);
+      const provider = node ? getNodeProvider(node.type) : "other";
       const rootToken = `{{${nodeId}}}`;
-      options.push({ token: rootToken, label: `${nodeId}${labelSuffix}`, nodeId });
+      options.push({
+        token: rootToken,
+        label: `${nodeId}${labelSuffix}`,
+        nodeId,
+        provider,
+        scope,
+      });
 
       const output = runStepOutputByNodeId.get(nodeId);
       if (output !== undefined) {
@@ -1701,19 +1829,34 @@ const ScenarioCanvasPage: DashboardPage = () => {
           ...flattenJsonPaths(output, nodeId).map((option) => ({
             ...option,
             label: `${option.label}${labelSuffix}`,
+            provider,
+            scope,
           }))
         );
       } else {
-        const node = nodeById.get(nodeId);
         if (node?.type.startsWith("http.")) {
           options.push(
-            { token: `{{${nodeId}.body}}`, label: `${nodeId}.body${labelSuffix}`, nodeId },
+            {
+              token: `{{${nodeId}.body}}`,
+              label: `${nodeId}.body${labelSuffix}`,
+              nodeId,
+              provider,
+              scope,
+            },
             {
               token: `{{${nodeId}.statusCode}}`,
               label: `${nodeId}.statusCode${labelSuffix}`,
               nodeId,
+              provider,
+              scope,
             },
-            { token: `{{${nodeId}.headers}}`, label: `${nodeId}.headers${labelSuffix}`, nodeId }
+            {
+              token: `{{${nodeId}.headers}}`,
+              label: `${nodeId}.headers${labelSuffix}`,
+              nodeId,
+              provider,
+              scope,
+            },
           );
         } else if (node?.type === "json.create") {
           const payload = (node.config as Record<string, unknown> | undefined)?.payload;
@@ -1722,6 +1865,8 @@ const ScenarioCanvasPage: DashboardPage = () => {
               ...flattenJsonPaths(payload, nodeId).map((option) => ({
                 ...option,
                 label: `${option.label}${labelSuffix}`,
+                provider,
+                scope,
               }))
             );
           }
@@ -1739,7 +1884,7 @@ const ScenarioCanvasPage: DashboardPage = () => {
         return;
       }
       if (node.type === "json.create") {
-        appendOptionsFromNode(node.id, " (other node)");
+        appendOptionsFromNode(node.id, " (other node)", "other");
       }
     });
 
@@ -2775,9 +2920,8 @@ const ScenarioCanvasPage: DashboardPage = () => {
       setHubspotConnectionName(`${selectedNode.app} connection`);
       setHubspotServiceUrl((previous) => previous || "https://api.hubapi.com");
     } else if (provider === "email") {
-      setEmailConnectionName(`${selectedNode.app} connection`);
-      setEmailConnectionAuthMode("apiToken");
-      setEmailMailbox((previous) => previous || "INBOX");
+      setIsEmailConnectionModalOpen(true);
+      return;
     }
     setIsConnectionModalOpen(true);
   };
@@ -3885,6 +4029,7 @@ const ScenarioCanvasPage: DashboardPage = () => {
   }
 
   return (
+    <>
     <section className="scenario-canvas-page">
       {error ? (
         <MLAlert className="scenarios-alert">
@@ -4306,9 +4451,18 @@ const ScenarioCanvasPage: DashboardPage = () => {
                   ))}
                 </select>
                 {!isConnectionsLoading && !connections.length ? (
-                  <p className="scenario-config-hint">
-                    No {selectedNodeProvider} connection exists yet for your account.
-                  </p>
+                  selectedNodeProvider === "email" ? (
+                    <div className="scenario-email-connection-empty">
+                      <p className="scenario-email-connection-empty-title">No email connection yet</p>
+                      <p className="scenario-email-connection-empty-body">
+                        Create a connection to send emails from this workflow. Supports Gmail, Outlook, Yahoo, or custom SMTP.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="scenario-config-hint">
+                      No {selectedNodeProvider} connection exists yet for your account.
+                    </p>
+                  )
                 ) : null}
               </>
             ) : (
@@ -4345,18 +4499,12 @@ const ScenarioCanvasPage: DashboardPage = () => {
 
                 <label className="scenario-config-label">Insert mapped value</label>
                 <div className="scenario-http-map-row">
-                  <select
-                    className="scenario-config-select"
+                  <VariableTokenPicker
+                    idPrefix="http-token"
+                    options={jsonMappingTokenOptions}
                     value={httpTokenPickerValue}
-                    onChange={(event) => setHttpTokenPickerValue(event.target.value)}
-                  >
-                    <option value="">Select prior node output</option>
-                    {jsonMappingTokenOptions.map((option) => (
-                      <option key={`http-token-${option.token}`} value={option.token}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setHttpTokenPickerValue}
+                  />
                   <MLButton
                     type="button"
                     variant="outline"
@@ -4439,23 +4587,13 @@ const ScenarioCanvasPage: DashboardPage = () => {
                       placeholder="Bearer token"
                     />
                     <div className="scenario-http-map-row">
-                      <select
-                        className="scenario-config-select"
+                      <VariableTokenPicker
+                        idPrefix="http-bearer-token"
+                        options={jsonMappingTokenOptions}
+                        placeholder="Select mapped token field"
                         value={httpBearerTokenPickerValue}
-                        onChange={(event) =>
-                          setHttpBearerTokenPickerValue(event.target.value)
-                        }
-                      >
-                        <option value="">Select mapped token field</option>
-                        {jsonMappingTokenOptions.map((option) => (
-                          <option
-                            key={`http-bearer-token-${option.token}`}
-                            value={option.token}
-                          >
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setHttpBearerTokenPickerValue}
+                      />
                       <MLButton
                         type="button"
                         variant="outline"
@@ -4752,47 +4890,23 @@ const ScenarioCanvasPage: DashboardPage = () => {
                         }
                         placeholder="Custom field name"
                       />
-                      <select
-                        className="scenario-config-select"
-                        value={mapping.sourceType}
-                        onChange={(event) =>
-                          updateJsonFieldMapping(mapping.id, "sourceType", event.target.value)
+                      <MappedSourceControl
+                        sourceType={mapping.sourceType}
+                        sourceToken={mapping.sourceToken}
+                        customValue={mapping.customValue}
+                        tokenOptions={jsonMappingTokenOptions}
+                        tokenPickerIdPrefix={mapping.id}
+                        customPlaceholder='Custom value (example: "hello", 123, true, {"a":1})'
+                        onSourceTypeChange={(value) =>
+                          updateJsonFieldMapping(mapping.id, "sourceType", value)
                         }
-                      >
-                        <option value="mapped">Mapped value</option>
-                        <option value="custom">Custom value</option>
-                      </select>
-                      {mapping.sourceType === "mapped" ? (
-                        <select
-                          className="scenario-config-select"
-                          value={mapping.sourceToken}
-                          onChange={(event) =>
-                            updateJsonFieldMapping(mapping.id, "sourceToken", event.target.value)
-                          }
-                        >
-                          <option value="">Select prior node output</option>
-                          {mapping.sourceToken &&
-                          !jsonMappingTokenOptions.some(
-                            (option) => option.token === mapping.sourceToken
-                          ) ? (
-                            <option value={mapping.sourceToken}>{mapping.sourceToken}</option>
-                          ) : null}
-                          {jsonMappingTokenOptions.map((option) => (
-                            <option key={`${mapping.id}-${option.token}`} value={option.token}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          className="scenario-config-input"
-                          value={mapping.customValue}
-                          onChange={(event) =>
-                            updateJsonFieldMapping(mapping.id, "customValue", event.target.value)
-                          }
-                          placeholder='Custom value (example: "hello", 123, true, {"a":1})'
-                        />
-                      )}
+                        onSourceTokenChange={(value) =>
+                          updateJsonFieldMapping(mapping.id, "sourceToken", value)
+                        }
+                        onCustomValueChange={(value) =>
+                          updateJsonFieldMapping(mapping.id, "customValue", value)
+                        }
+                      />
                       <button
                         type="button"
                         className="scenario-http-remove scenario-json-map-remove"
@@ -5008,59 +5122,23 @@ const ScenarioCanvasPage: DashboardPage = () => {
                               }
                               placeholder="Variable name"
                             />
-                            <select
-                              className="scenario-config-select"
-                              value={binding.sourceType}
-                              onChange={(event) =>
-                                updateEmailTemplateBinding(
-                                  binding.id,
-                                  "sourceType",
-                                  event.target.value
-                                )
+                            <MappedSourceControl
+                              sourceType={binding.sourceType}
+                              sourceToken={binding.sourceToken}
+                              customValue={binding.customValue}
+                              tokenOptions={jsonMappingTokenOptions}
+                              tokenPickerIdPrefix={binding.id}
+                              customPlaceholder="Custom value or JSON literal"
+                              onSourceTypeChange={(value) =>
+                                updateEmailTemplateBinding(binding.id, "sourceType", value)
                               }
-                            >
-                              <option value="mapped">Mapped value</option>
-                              <option value="custom">Custom value</option>
-                            </select>
-                            {binding.sourceType === "mapped" ? (
-                              <select
-                                className="scenario-config-select"
-                                value={binding.sourceToken}
-                                onChange={(event) =>
-                                  updateEmailTemplateBinding(
-                                    binding.id,
-                                    "sourceToken",
-                                    event.target.value
-                                  )
-                                }
-                              >
-                                <option value="">Select prior node output</option>
-                                {binding.sourceToken &&
-                                !jsonMappingTokenOptions.some(
-                                  (option) => option.token === binding.sourceToken
-                                ) ? (
-                                  <option value={binding.sourceToken}>{binding.sourceToken}</option>
-                                ) : null}
-                                {jsonMappingTokenOptions.map((option) => (
-                                  <option key={`${binding.id}-${option.token}`} value={option.token}>
-                                    {option.label}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              <input
-                                className="scenario-config-input"
-                                value={binding.customValue}
-                                onChange={(event) =>
-                                  updateEmailTemplateBinding(
-                                    binding.id,
-                                    "customValue",
-                                    event.target.value
-                                  )
-                                }
-                                placeholder='Custom value or JSON literal'
-                              />
-                            )}
+                              onSourceTokenChange={(value) =>
+                                updateEmailTemplateBinding(binding.id, "sourceToken", value)
+                              }
+                              onCustomValueChange={(value) =>
+                                updateEmailTemplateBinding(binding.id, "customValue", value)
+                              }
+                            />
                             <button
                               type="button"
                               className="scenario-http-remove scenario-json-map-remove"
@@ -5187,18 +5265,12 @@ const ScenarioCanvasPage: DashboardPage = () => {
                   <>
                     <label className="scenario-config-label">Insert mapped value</label>
                     <div className="scenario-http-map-row">
-                      <select
-                        className="scenario-config-select"
+                      <VariableTokenPicker
+                        idPrefix="node-config-token-inline-email"
+                        options={jsonMappingTokenOptions}
                         value={nodeConfigTokenPickerValue}
-                        onChange={(event) => setNodeConfigTokenPickerValue(event.target.value)}
-                      >
-                        <option value="">Select prior node output</option>
-                        {jsonMappingTokenOptions.map((option) => (
-                          <option key={`node-config-token-${option.token}`} value={option.token}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setNodeConfigTokenPickerValue}
+                      />
                       <MLButton
                         type="button"
                         variant="outline"
@@ -5226,18 +5298,12 @@ const ScenarioCanvasPage: DashboardPage = () => {
               <>
                 <label className="scenario-config-label">Insert mapped value</label>
                 <div className="scenario-http-map-row">
-                  <select
-                    className="scenario-config-select"
+                  <VariableTokenPicker
+                    idPrefix="node-config-token"
+                    options={jsonMappingTokenOptions}
                     value={nodeConfigTokenPickerValue}
-                    onChange={(event) => setNodeConfigTokenPickerValue(event.target.value)}
-                  >
-                    <option value="">Select prior node output</option>
-                    {jsonMappingTokenOptions.map((option) => (
-                      <option key={`node-config-token-${option.token}`} value={option.token}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setNodeConfigTokenPickerValue}
+                  />
                   <MLButton
                     type="button"
                     variant="outline"
@@ -5943,6 +6009,23 @@ const ScenarioCanvasPage: DashboardPage = () => {
         </div>
       )}
     </section>
+
+    <EmailConnectionModal
+      isOpen={isEmailConnectionModalOpen}
+      workspaceId={scenario?.workspace_id}
+      tenantId={scenario?.tenant_id}
+      onClose={() => setIsEmailConnectionModalOpen(false)}
+      onCreated={(connection) => {
+        setConnections((previous) => {
+          const exists = previous.some((item) => item.id === connection.id);
+          if (exists) return previous;
+          return [connection, ...previous];
+        });
+        setNodeConnection(String(connection.id));
+        setIsEmailConnectionModalOpen(false);
+      }}
+    />
+    </>
   );
 };
 

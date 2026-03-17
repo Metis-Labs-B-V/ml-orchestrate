@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MLButton } from "ml-uikit";
-import { ArrowUpRight, Clock3, RefreshCw, Search } from "lucide-react";
+import { ArrowUpRight, Clock3, RefreshCw, Search, ShieldCheck } from "lucide-react";
 
 import {
   getRun,
@@ -111,6 +111,29 @@ const getStepSummaryLine = (step: RunStepView): string => {
     return payload ? `${Object.keys(payload).length} mapped field(s)` : "JSON payload prepared";
   }
   return formatRunLabel(nodeType);
+};
+
+const getAuditEventTone = (eventType: string): string => {
+  const t = String(eventType || "").toLowerCase();
+  if (t.includes("publish")) return "indigo";
+  if (t.includes("activat")) return "green";
+  if (t.includes("deactivat")) return "slate";
+  if (t.includes("schedule")) return "amber";
+  if (t.includes("creat")) return "teal";
+  if (t.includes("delet") || t.includes("remov")) return "red";
+  if (t.includes("run")) return "purple";
+  if (t.includes("edit") || t.includes("updat")) return "blue";
+  return "gray";
+};
+
+const getActorInitials = (email: string): string => {
+  if (!email) return "S";
+  const local = email.split("@")[0];
+  const parts = local.split(/[._-]/);
+  if (parts.length >= 2 && parts[0] && parts[1]) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return local.slice(0, 2).toUpperCase();
 };
 
 const useDebouncedValue = <T,>(value: T, delayMs: number) => {
@@ -607,6 +630,24 @@ const ScenarioHistoryExplorer = ({
                         selectedStepId === stepId ? "scenario-history-step-card--active" : ""
                       } scenario-history-step-card--${stepStatus}`}
                     >
+                      <div className="scenario-history-step-card-header">
+                        <span className="scenario-history-step-index">Step {index + 1}</span>
+                        <div className="scenario-history-step-card-actions">
+                          <span className={`scenario-run-step-badge scenario-run-step-badge--${stepStatus}`}>
+                            {formatRunLabel(stepStatus)}
+                          </span>
+                          {nodeId && onJumpToNode ? (
+                            <button
+                              type="button"
+                              className="scenario-history-step-jump"
+                              onClick={() => onJumpToNode(nodeId)}
+                            >
+                              <ArrowUpRight className="h-4 w-4" />
+                              Jump to node
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
                       <button
                         type="button"
                         className="scenario-history-step-select"
@@ -619,12 +660,6 @@ const ScenarioHistoryExplorer = ({
                           }
                         }}
                       >
-                        <div className="scenario-history-step-topline">
-                          <span className="scenario-history-step-index">Step {index + 1}</span>
-                          <span className={`scenario-run-step-badge scenario-run-step-badge--${stepStatus}`}>
-                            {formatRunLabel(stepStatus)}
-                          </span>
-                        </div>
                         <strong>{linkedNode?.title || String(step.node_type || nodeId || stepId)}</strong>
                         <p>{getStepSummaryLine(step)}</p>
                         <div className="scenario-history-step-meta">
@@ -635,16 +670,6 @@ const ScenarioHistoryExplorer = ({
                           <p className="scenario-history-step-error">{errorMessage}</p>
                         ) : null}
                       </button>
-                      {nodeId && onJumpToNode ? (
-                        <button
-                          type="button"
-                          className="scenario-history-step-jump"
-                          onClick={() => onJumpToNode(nodeId)}
-                        >
-                          <ArrowUpRight className="h-4 w-4" />
-                          Jump to node
-                        </button>
-                      ) : null}
                     </article>
                   );
                 })
@@ -747,16 +772,20 @@ const ScenarioHistoryExplorer = ({
 
   const renderAuditMode = () => (
     <div className="scenario-audit-layout">
-      <div className="scenario-history-searchbox">
-        <Search className="h-4 w-4" />
-        <input
-          value={auditSearch}
-          onChange={(event) => setAuditSearch(event.target.value)}
-          placeholder="Search audit events, labels, actor emails, payload"
-        />
-      </div>
-      <div className="scenario-history-filter-row">
-        <select value={auditEventType} onChange={(event) => setAuditEventType(event.target.value)}>
+      <div className="scenario-audit-toolbar">
+        <div className="scenario-history-searchbox scenario-audit-searchbox">
+          <Search className="h-4 w-4" />
+          <input
+            value={auditSearch}
+            onChange={(event) => setAuditSearch(event.target.value)}
+            placeholder="Search events, labels, actor emails, payload…"
+          />
+        </div>
+        <select
+          className="scenario-audit-filter-select"
+          value={auditEventType}
+          onChange={(event) => setAuditEventType(event.target.value)}
+        >
           <option value="">All event types</option>
           {auditEventTypeOptions.map((eventTypeValue) => (
             <option key={eventTypeValue} value={eventTypeValue}>
@@ -765,41 +794,57 @@ const ScenarioHistoryExplorer = ({
           ))}
         </select>
       </div>
-      <div className="scenario-history-pane-header">
-        <strong>Audit events</strong>
-        <span>{auditCount}</span>
+
+      <div className="scenario-audit-panel">
+        <div className="scenario-audit-section-header">
+          <span className="scenario-audit-section-title">Audit events</span>
+          <span className="scenario-audit-count-pill">{auditCount}</span>
+        </div>
+
+        {isLoadingAudit ? (
+          <div className="scenario-history-empty">
+            <p>Loading audit history…</p>
+          </div>
+        ) : auditEvents.length ? (
+          <div className="scenario-audit-event-list">
+            {auditEvents.map((event) => {
+              const tone = getAuditEventTone(event.event_type);
+              const initials = getActorInitials(event.actor_email || "");
+              return (
+                <article key={event.id} className={`scenario-audit-event scenario-audit-event--${tone}`}>
+                  <div className="scenario-audit-event-avatar">{initials}</div>
+                  <div className="scenario-audit-event-body">
+                    <div className="scenario-audit-event-topline">
+                      <span className={`scenario-audit-event-badge scenario-audit-event-badge--${tone}`}>
+                        {formatRunLabel(event.event_type)}
+                      </span>
+                      <time className="scenario-audit-event-time">{formatRunDateTime(event.created_at)}</time>
+                    </div>
+                    <strong className="scenario-audit-event-label">{event.event_label}</strong>
+                    <p className="scenario-audit-event-actor">
+                      {event.actor_email || "System"}
+                      {event.run_id ? (
+                        <span className="scenario-audit-event-run-link">&nbsp;· Run #{event.run_id}</span>
+                      ) : null}
+                    </p>
+                    {event.payload_json && Object.keys(event.payload_json).length ? (
+                      <pre className="scenario-history-json-block scenario-audit-payload">
+                        {JSON.stringify(event.payload_json, null, 2)}
+                      </pre>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="scenario-audit-empty">
+            <ShieldCheck className="scenario-audit-empty-icon" strokeWidth={1.5} />
+            <strong>No audit events matched this view.</strong>
+            <p>Scenario changes such as publish, activate, or schedule edits will appear here.</p>
+          </div>
+        )}
       </div>
-      {isLoadingAudit ? (
-        <div className="scenario-history-empty">
-          <p>Loading audit history...</p>
-        </div>
-      ) : auditEvents.length ? (
-        <div className="scenario-audit-list">
-          {auditEvents.map((event) => (
-            <article key={event.id} className="scenario-audit-card">
-              <div className="scenario-audit-card-topline">
-                <span className="scenario-history-provider-tag">{formatRunLabel(event.event_type)}</span>
-                <span>{formatRunDateTime(event.created_at)}</span>
-              </div>
-              <strong>{event.event_label}</strong>
-              <p>
-                {event.actor_email || "System"}
-                {event.run_id ? ` • linked to run #${event.run_id}` : ""}
-              </p>
-              {event.payload_json && Object.keys(event.payload_json).length ? (
-                <pre className="scenario-history-json-block">
-                  {JSON.stringify(event.payload_json, null, 2)}
-                </pre>
-              ) : null}
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="scenario-history-empty">
-          <strong>No audit events matched this view.</strong>
-          <p>Scenario changes such as publish, activate, or schedule edits will appear here.</p>
-        </div>
-      )}
     </div>
   );
 

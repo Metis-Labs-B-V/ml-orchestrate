@@ -332,6 +332,41 @@ export async function createApiTokenConnection(payload: {
   return envelope.data;
 }
 
+export async function getConnection(connectionId: string | number): Promise<ConnectionRecord> {
+  const response = await apiFetch(API_PATHS.connections.detail(connectionId));
+  const envelope = await parseEnvelope<ConnectionRecord>(response);
+  if (!envelope.data) {
+    throw new Error("Connection not found.");
+  }
+  return envelope.data;
+}
+
+export async function updateConnection(
+  connectionId: string | number,
+  payload: {
+    display_name?: string;
+    secret_payload?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }
+): Promise<ConnectionRecord> {
+  const response = await apiFetch(API_PATHS.connections.detail(connectionId), {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  const envelope = await parseEnvelope<ConnectionRecord>(response);
+  if (!envelope.data) {
+    throw new Error("Unable to update connection.");
+  }
+  return envelope.data;
+}
+
+export async function deleteConnection(connectionId: string | number): Promise<void> {
+  const response = await apiFetch(API_PATHS.connections.detail(connectionId), {
+    method: "DELETE",
+  });
+  await parseEnvelope<Record<string, unknown>>(response);
+}
+
 export async function testConnection(connectionId: string | number): Promise<void> {
   const response = await apiFetch(API_PATHS.connections.test(connectionId), {
     method: "POST",
